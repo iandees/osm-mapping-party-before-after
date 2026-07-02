@@ -208,18 +208,12 @@ def run_make(history_file: str, params: dict, worker: "Worker") -> None:
         raise RuntimeError(f"make.sh exited with code {rc}")
 
 
-def downscale_gif(path: str, longest_px: int) -> None:
-    """Shrink an animated GIF so its longer side is at most `longest_px` (in place)."""
-    out = path + ".resized.gif"
-    subprocess.run(
-        ["gm", "convert", path, "-coalesce", "-resize", f"{longest_px}x{longest_px}>", out],
-        check=True,
-    )
-    os.replace(out, path)
+def upload_results(job_id: str) -> str:
+    """Upload the produced GIF to R2 at its native resolution; return its full object key.
 
-
-def upload_results(job_id: str, output_px: int) -> str:
-    """Downscale and upload the produced GIF to R2; return its full object key.
+    The GIF is delivered exactly as rendered — no post-render scaling, since
+    resampling blurs the map labels. The frontend's suggested zoom keeps the
+    native render close to the requested output size.
 
     A job renders a single zoom, so there is exactly one GIF; if make.sh somehow
     produced more, we deliver the first.
@@ -237,7 +231,6 @@ def upload_results(job_id: str, output_px: int) -> str:
     if not gifs:
         raise RuntimeError("make.sh produced no GIFs")
     path = gifs[0]
-    downscale_gif(path, output_px)
     key = prefix + os.path.basename(path)
     r2.upload_file(path, bucket, key, ExtraArgs={"ContentType": "image/gif"})
     print(f"uploaded {key}")
@@ -261,7 +254,7 @@ def main() -> int:
         run_make(history_file, params, worker)
 
         worker.progress("Uploading your map…")
-        key = upload_results(job_id, int(params["output_px"]))
+        key = upload_results(job_id)
 
         worker.post_status(status="done", resultKey=key)
         return 0
