@@ -48,7 +48,7 @@ RUN wget --quiet https://downloads.sourceforge.net/gs-fonts/ghostscript-fonts-st
 
 # Install python libraries
 
-RUN pip install pyyaml nik4 requests notebook jupyterlab ipywidgets
+RUN pip install pyyaml nik4 requests notebook jupyterlab ipywidgets boto3
 
 # Install carto for stylesheet
 RUN npm install -g carto@1.2.0
@@ -68,4 +68,8 @@ WORKDIR ${HOME}
 
 RUN git clone https://github.com/geofabrik/sendfile_osm_oauth_protector
 
+RUN chmod +x ${HOME}/render/entrypoint.sh ${HOME}/render/render_job.py
+
+# Default entrypoint is the notebook (unchanged). The AWS Batch job definition
+# overrides the command to run render/entrypoint.sh for headless rendering.
 ENTRYPOINT ["./entrypoint-new.sh"]
