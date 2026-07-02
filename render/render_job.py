@@ -14,6 +14,8 @@ All heavy state (Postgres, extracts) lives in this ephemeral task, so tasks are
 fully isolated and the compute scales to zero when the queue drains.
 """
 
+from __future__ import annotations  # base image is Python 3.9; keep `X | None` lazy
+
 import glob
 import json
 import os
@@ -62,7 +64,7 @@ class Worker:
 
 
 def fetch_region_index() -> dict:
-    url = env("GEOFABRIK_INDEX_URL", "https://osm-internal.download.geofabrik.de/index-v1.json")
+    url = env("GEOFABRIK_INDEX_URL", "https://download.geofabrik.de/index-v1.json")
     with urllib.request.urlopen(url, timeout=120) as resp:
         return json.load(resp)
 
