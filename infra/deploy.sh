@@ -27,7 +27,9 @@ uv run --with awscli aws --profile openaddresses --region us-east-1 cloudformati
     "R2SecretAccessKey=$R2_SECRET_ACCESS_KEY" \
     "CallbackSecret=$CALLBACK_SECRET"
 
-echo "Stack deployed. Outputs:"
+echo "Stack deployed. Non-sensitive outputs:"
 uv run --with awscli aws --profile openaddresses --region us-east-1 \
   cloudformation describe-stacks --stack-name osm-before-after \
-  --query 'Stacks[0].Outputs' --output table
+  --query "Stacks[0].Outputs[?OutputKey!='WorkerSecretAccessKey'].[OutputKey,OutputValue]" \
+  --output table
+echo "(WorkerSecretAccessKey is intentionally not printed; it will be piped into wrangler.)"
