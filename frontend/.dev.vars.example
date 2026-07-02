@@ -1,0 +1,5 @@
+# Copy to .dev.vars for `wrangler dev`, and set the same as `wrangler secret put` in prod.
+SECRET_KEY="change-me-long-random"
+AWS_ACCESS_KEY_ID="from-cfn-output-WorkerAccessKeyId"
+AWS_SECRET_ACCESS_KEY="from-cfn-output-WorkerSecretAccessKey"
+CALLBACK_SECRET="must-match-cfn-CallbackSecret"

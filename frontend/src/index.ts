@@ -1,0 +1,186 @@
+import { Hono } from "hono";
+import { getCookie, setCookie, deleteCookie } from "hono/cookie";
+import type { Env } from "./env";
+import {
+  DEFAULT_LOGIN_TTL_SECONDS,
+  DEFAULT_SESSION_TTL_SECONDS,
+  SESSION_COOKIE,
+  requireSession,
+  signSession,
+  verifySession,
+} from "./auth";
+import {
+  consumeLoginToken,
+  countActiveJobsByEmail,
+  createJob,
+  createLoginToken,
+  getJob,
+  markJobDone,
+  markJobFailed,
+  markJobRunning,
+} from "./db";
+import { isValidEmail, validateJobInput } from "./validation";
+import { enqueueRenderJob } from "./aws";
+import { sendLoginEmail, sendResultEmail } from "./email";
+import { checkEmailPage, formPage, jobPage, loginPage } from "./templates";
+
+type Vars = { email: string };
+const app = new Hono<{ Bindings: Env; Variables: Vars }>();
+
+app.get("/health", (c) => c.text("ok"));
+
+// ---- Home: login page or job form -------------------------------------
+app.get("/", async (c) => {
+  const session = await verifySession(getCookie(c, SESSION_COOKIE), c.env.SECRET_KEY);
+  if (!session) return c.html(loginPage());
+  return c.html(formPage(session.email));
+});
+
+// ---- Magic-link login -------------------------------------------------
+app.post("/login", async (c) => {
+  const form = await c.req.parseBody();
+  const email = form.email;
+  if (!isValidEmail(email)) return c.html(loginPage("Please enter a valid email address."), 400);
+
+  const token = await createLoginToken(c.env.DB, email, DEFAULT_LOGIN_TTL_SECONDS);
+  const link = `${c.env.PUBLIC_BASE_URL}/verify/${token}`;
+  // Best-effort send; don't reveal delivery failures to avoid enumeration.
+  try {
+    await sendLoginEmail(c.env, email, link);
+  } catch (e) {
+    console.error("login email failed", e);
+  }
+  return c.html(checkEmailPage(email));
+});
+
+app.get("/verify/:token", async (c) => {
+  const email = await consumeLoginToken(c.env.DB, c.req.param("token"));
+  if (!email) return c.html(loginPage("That sign-in link is invalid or expired."), 400);
+
+  const cookie = await signSession(email, c.env.SECRET_KEY);
+  setCookie(c, SESSION_COOKIE, cookie, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax",
+    path: "/",
+    maxAge: DEFAULT_SESSION_TTL_SECONDS,
+  });
+  return c.redirect("/", 302);
+});
+
+app.post("/logout", (c) => {
+  deleteCookie(c, SESSION_COOKIE, { path: "/" });
+  return c.redirect("/", 302);
+});
+
+// ---- Job submission (auth required) -----------------------------------
+app.post("/submit", requireSession(), async (c) => {
+  const email = c.get("email");
+  const form = await c.req.parseBody();
+  const maxArea = Number(c.env.MAX_BBOX_AREA) || 1.0;
+  const result = validateJobInput(form as Record<string, unknown>, maxArea);
+  if (!result.ok) return c.html(formPage(email, result.errors.join("; ")), 400);
+
+  const cap = Number(c.env.MAX_ACTIVE_JOBS_PER_EMAIL) || 3;
+  if ((await countActiveJobsByEmail(c.env.DB, email)) >= cap) {
+    return c.html(
+      formPage(email, `You already have ${cap} jobs in progress. Please wait for them to finish.`),
+      429,
+    );
+  }
+
+  const job = await createJob(c.env.DB, { email, ...result.value });
+  try {
+    await enqueueRenderJob(c.env, job.id);
+  } catch (e) {
+    console.error("enqueue failed", e);
+    await markJobFailed(c.env.DB, job.id, "Could not queue the render. Please try again.");
+    return c.html(formPage(email, "Could not queue the render. Please try again."), 502);
+  }
+  return c.redirect(`/jobs/${job.id}`, 302);
+});
+
+// ---- Job status / result ----------------------------------------------
+app.get("/jobs/:id", async (c) => {
+  const job = await getJob(c.env.DB, c.req.param("id"));
+  if (!job) return c.notFound();
+  let keys: string[] = [];
+  if (job.status === "done" && job.result_key) {
+    const listed = await c.env.RESULTS.list({ prefix: job.result_key });
+    keys = listed.objects.map((o) => o.key);
+  }
+  return c.html(jobPage(job, keys));
+});
+
+app.get("/jobs/:id.json", async (c) => {
+  const job = await getJob(c.env.DB, c.req.param("id") ?? "");
+  if (!job) return c.json({ error: "not found" }, 404);
+  return c.json({ status: job.status, error: job.error, result_key: job.result_key });
+});
+
+// ---- Internal callbacks from the render task --------------------------
+function checkCallbackAuth(c: { req: { header: (n: string) => string | undefined }; env: Env }): boolean {
+  const provided = c.req.header("x-callback-secret");
+  return !!provided && provided === c.env.CALLBACK_SECRET;
+}
+
+app.get("/internal/jobs/:id", async (c) => {
+  if (!checkCallbackAuth(c)) return c.json({ error: "unauthorized" }, 401);
+  const job = await getJob(c.env.DB, c.req.param("id"));
+  if (!job) return c.json({ error: "not found" }, 404);
+  return c.json({
+    id: job.id,
+    bbox: job.bbox,
+    time_before: job.time_before,
+    time_after: job.time_after,
+    min_zoom: job.min_zoom,
+    max_zoom: job.max_zoom,
+    num_frames: job.num_frames,
+  });
+});
+
+app.post("/internal/jobs/:id", async (c) => {
+  if (!checkCallbackAuth(c)) return c.json({ error: "unauthorized" }, 401);
+  const id = c.req.param("id");
+  const body = await c.req.json<{ status: string; resultKey?: string; error?: string }>();
+
+  if (body.status === "running") {
+    await markJobRunning(c.env.DB, id);
+    return c.json({ ok: true });
+  }
+  if (body.status === "failed") {
+    await markJobFailed(c.env.DB, id, body.error ?? "render failed");
+    return c.json({ ok: true });
+  }
+  if (body.status === "done") {
+    if (!body.resultKey) return c.json({ error: "resultKey required" }, 400);
+    const applied = await markJobDone(c.env.DB, id, body.resultKey);
+    if (applied) {
+      const job = await getJob(c.env.DB, id);
+      if (job) {
+        try {
+          await sendResultEmail(c.env, job.email, `${c.env.PUBLIC_BASE_URL}/jobs/${id}`);
+        } catch (e) {
+          console.error("result email failed", e);
+        }
+      }
+    }
+    return c.json({ ok: true });
+  }
+  return c.json({ error: "unknown status" }, 400);
+});
+
+// ---- Serve result media from R2 ---------------------------------------
+app.get("/r/*", async (c) => {
+  const key = c.req.path.slice("/r/".length);
+  const obj = await c.env.RESULTS.get(key);
+  if (!obj) return c.notFound();
+  return new Response(obj.body, {
+    headers: {
+      "content-type": obj.httpMetadata?.contentType ?? "image/gif",
+      "cache-control": "public, max-age=86400",
+    },
+  });
+});
+
+export default app;

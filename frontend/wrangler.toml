@@ -1,0 +1,30 @@
+name = "osm-before-after"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# Public, non-secret configuration. Secrets are set with `wrangler secret put`:
+#   SECRET_KEY, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, CALLBACK_SECRET
+[vars]
+PUBLIC_BASE_URL = "https://osm-before-after.example.workers.dev"
+MAIL_FROM = "noreply@example.com"
+AWS_REGION = "us-east-1"
+SQS_QUEUE_URL = ""
+# Max bbox area in square degrees (guards against huge, expensive renders).
+MAX_BBOX_AREA = "1.0"
+# Max concurrent non-terminal jobs (queued/running) per email address.
+MAX_ACTIVE_JOBS_PER_EMAIL = "3"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "osm-before-after"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "RESULTS"
+bucket_name = "osm-before-after-results"
+
+# Cloudflare Email Service binding (arbitrary outbound; requires Workers Paid).
+[[send_email]]
+name = "EMAIL"
