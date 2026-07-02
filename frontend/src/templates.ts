@@ -1,5 +1,13 @@
 import type { Job } from "./db";
-import { FRAMES_MAX, FRAMES_MIN, ZOOM_MAX } from "./validation";
+import {
+  FRAMES_MAX,
+  FRAMES_MIN,
+  SIZE_DEFAULT,
+  SIZE_MAX,
+  SIZE_MIN,
+  ZOOM_MAX,
+  ZOOM_MIN,
+} from "./validation";
 
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -86,12 +94,9 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
 
   <div class="row">
     <div>
-      <label for="min_zoom">Min zoom</label>
-      <input id="min_zoom" name="min_zoom" type="number" min="0" max="${ZOOM_MAX}" value="6" required>
-    </div>
-    <div>
-      <label for="max_zoom">Max zoom</label>
-      <input id="max_zoom" name="max_zoom" type="number" min="0" max="${ZOOM_MAX}" value="12" required>
+      <label for="output_px">Image size (longest side, px)</label>
+      <input id="output_px" name="output_px" type="number" min="${SIZE_MIN}" max="${SIZE_MAX}" value="${SIZE_DEFAULT}" required>
+      <p class="muted" id="zoomhint">Draw an area to see the map zoom that will be used.</p>
     </div>
     <div>
       <label for="num_frames">Frames</label>
@@ -113,16 +118,41 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
     edit: { featureGroup: drawn, edit: false }
   });
   map.addControl(drawControl);
+  const ZOOM_MIN = ${ZOOM_MIN}, ZOOM_MAX = ${ZOOM_MAX};
+  let current = null; // [left, bottom, right, top]
+
+  // Mirror of validation.ts suggestedZoom(): the server recomputes authoritatively.
+  function suggestedZoom(left, bottom, right, top, targetPx) {
+    const latToY = lat => {
+      const s = Math.sin(lat * Math.PI / 180);
+      return 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI);
+    };
+    const width = (right - left) / 360 * 256;
+    const height = Math.abs(latToY(bottom) - latToY(top)) * 256;
+    const longest0 = Math.max(width, height);
+    if (!(longest0 > 0)) return ZOOM_MAX;
+    const z = Math.ceil(Math.log2(targetPx / longest0));
+    return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+  }
+  function updateZoomHint() {
+    const hint = document.getElementById('zoomhint');
+    if (!current) { hint.textContent = 'Draw an area to see the map zoom that will be used.'; return; }
+    const px = Number(document.getElementById('output_px').value) || ${SIZE_DEFAULT};
+    const z = suggestedZoom(current[0], current[1], current[2], current[3], px);
+    hint.textContent = 'At ' + px + 'px this area will render at map zoom ' + z + '.';
+  }
   function setBbox(layer) {
     drawn.clearLayers();
     drawn.addLayer(layer);
     const b = layer.getBounds();
-    const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]
-      .map(n => n.toFixed(5)).join(',');
+    current = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+    const bbox = current.map(n => n.toFixed(5)).join(',');
     document.getElementById('bbox').value = bbox;
     document.getElementById('bboxlabel').textContent = 'Selected bbox: ' + bbox;
+    updateZoomHint();
   }
   map.on(L.Draw.Event.CREATED, e => setBbox(e.layer));
+  document.getElementById('output_px').addEventListener('input', updateZoomHint);
   document.getElementById('jobform').addEventListener('submit', e => {
     if (!document.getElementById('bbox').value) {
       e.preventDefault();

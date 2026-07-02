@@ -8,8 +8,8 @@ export interface Job {
   bbox: string;
   time_before: string;
   time_after: string;
-  min_zoom: number;
-  max_zoom: number;
+  zoom: number;
+  output_px: number;
   num_frames: number;
   status: JobStatus;
   error: string | null;
@@ -24,8 +24,8 @@ export interface NewJob {
   bbox: string;
   time_before: string;
   time_after: string;
-  min_zoom: number;
-  max_zoom: number;
+  zoom: number;
+  output_px: number;
   num_frames: number;
 }
 
@@ -78,7 +78,7 @@ export async function createJob(
   await db
     .prepare(
       `INSERT INTO jobs
-        (id, email, bbox, time_before, time_after, min_zoom, max_zoom, num_frames, status, created_at)
+        (id, email, bbox, time_before, time_after, zoom, output_px, num_frames, status, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
     )
     .bind(
@@ -87,8 +87,8 @@ export async function createJob(
       job.bbox,
       job.time_before,
       job.time_after,
-      job.min_zoom,
-      job.max_zoom,
+      job.zoom,
+      job.output_px,
       job.num_frames,
       now,
     )

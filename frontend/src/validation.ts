@@ -4,21 +4,66 @@
 // login link actually arrives).
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export const ZOOM_MIN = 0;
-export const ZOOM_MAX = 19;
+export const ZOOM_MIN = 2;
+export const ZOOM_MAX = 18;
 export const FRAMES_MIN = 2;
 export const FRAMES_MAX = 12;
 
+// Output image size (longest side, px). The user picks the size; the zoom is
+// derived from their bbox. Bounding the size bounds both the final GIF and the
+// intermediate render, so there is no separate pixel/OOM guard.
+export const SIZE_MIN = 256;
+export const SIZE_MAX = 2000;
+export const SIZE_DEFAULT = 800;
+
 export function isValidEmail(email: unknown): email is string {
   return typeof email === "string" && email.length <= 254 && EMAIL_RE.test(email);
+}
+
+/** Approximate rendered pixel dimensions for a bbox at a Web-Mercator zoom. */
+export function renderedPixelSize(
+  left: number,
+  bottom: number,
+  right: number,
+  top: number,
+  zoom: number,
+): { width: number; height: number } {
+  const worldPx = 256 * 2 ** zoom;
+  const latToY = (lat: number) => {
+    const s = Math.sin((lat * Math.PI) / 180);
+    return 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI);
+  };
+  const width = ((right - left) / 360) * worldPx;
+  const height = Math.abs(latToY(bottom) - latToY(top)) * worldPx;
+  return { width, height };
+}
+
+/**
+ * Integer Web-Mercator zoom whose rendered image is at least `targetPx` on its
+ * longer side (so downscaling to `targetPx` stays crisp), clamped to [ZOOM_MIN,
+ * ZOOM_MAX]. This is the authoritative computation; the frontend mirrors it to
+ * preview the zoom, but the server always recomputes it.
+ */
+export function suggestedZoom(
+  left: number,
+  bottom: number,
+  right: number,
+  top: number,
+  targetPx: number,
+): number {
+  const { width, height } = renderedPixelSize(left, bottom, right, top, 0);
+  const longest0 = Math.max(width, height);
+  if (!(longest0 > 0)) return ZOOM_MAX;
+  const z = Math.ceil(Math.log2(targetPx / longest0));
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 }
 
 export interface JobInput {
   bbox: string; // normalized "left,bottom,right,top"
   time_before: string; // ISO-8601 (Z)
   time_after: string;
-  min_zoom: number;
-  max_zoom: number;
+  zoom: number; // derived from bbox + output_px
+  output_px: number; // longest side of the delivered GIF
   num_frames: number;
 }
 
@@ -41,8 +86,9 @@ function parseNum(s: unknown): number | null {
 }
 
 /**
- * Validate a job submission form. `maxBboxArea` is in square degrees.
- * Fields expected: bbox, time_before, time_after, min_zoom, max_zoom, num_frames.
+ * Validate a job submission form. `maxBboxArea` is in square degrees (bounds the
+ * data-extraction cost regardless of output size). Fields expected: bbox,
+ * time_before, time_after, output_px, num_frames. The zoom is derived server-side.
  */
 export function validateJobInput(
   form: Record<string, unknown>,
@@ -51,7 +97,7 @@ export function validateJobInput(
   const errors: string[] = [];
 
   // ---- bbox ----
-  let normalizedBbox = "";
+  let coords: [number, number, number, number] | null = null;
   const rawBbox = form.bbox;
   const parts =
     typeof rawBbox === "string" ? rawBbox.split(",").map((p) => Number(p.trim())) : [];
@@ -72,7 +118,7 @@ export function validateJobInput(
           `bbox area ${area.toFixed(3)} exceeds the maximum of ${maxBboxArea} square degrees`,
         );
       }
-      normalizedBbox = [left, bottom, right, top].join(",");
+      coords = [left, bottom, right, top];
     }
   }
 
@@ -85,17 +131,10 @@ export function validateJobInput(
     errors.push("time_before must be earlier than time_after");
   }
 
-  // ---- zoom ----
-  const minZoom = parseNum(form.min_zoom);
-  const maxZoom = parseNum(form.max_zoom);
-  if (minZoom === null || !Number.isInteger(minZoom) || minZoom < ZOOM_MIN || minZoom > ZOOM_MAX) {
-    errors.push(`min_zoom must be an integer in [${ZOOM_MIN}, ${ZOOM_MAX}]`);
-  }
-  if (maxZoom === null || !Number.isInteger(maxZoom) || maxZoom < ZOOM_MIN || maxZoom > ZOOM_MAX) {
-    errors.push(`max_zoom must be an integer in [${ZOOM_MIN}, ${ZOOM_MAX}]`);
-  }
-  if (minZoom !== null && maxZoom !== null && minZoom > maxZoom) {
-    errors.push("min_zoom must be <= max_zoom");
+  // ---- output size ----
+  const size = parseNum(form.output_px);
+  if (size === null || !Number.isInteger(size) || size < SIZE_MIN || size > SIZE_MAX) {
+    errors.push(`output_px must be an integer in [${SIZE_MIN}, ${SIZE_MAX}]`);
   }
 
   // ---- frames ----
@@ -104,16 +143,17 @@ export function validateJobInput(
     errors.push(`num_frames must be an integer in [${FRAMES_MIN}, ${FRAMES_MAX}]`);
   }
 
-  if (errors.length > 0) return { ok: false, errors };
+  if (errors.length > 0 || !coords) return { ok: false, errors };
 
+  const [l, b, r, t] = coords;
   return {
     ok: true,
     value: {
-      bbox: normalizedBbox,
+      bbox: [l, b, r, t].join(","),
       time_before: before!,
       time_after: after!,
-      min_zoom: minZoom!,
-      max_zoom: maxZoom!,
+      zoom: suggestedZoom(l, b, r, t, size!),
+      output_px: size!,
       num_frames: frames!,
     },
   };

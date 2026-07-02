@@ -19,8 +19,8 @@ const sampleJob: NewJob = {
   bbox: "-1,50,0,51",
   time_before: "2020-01-01T00:00:00Z",
   time_after: "2024-01-01T00:00:00Z",
-  min_zoom: 6,
-  max_zoom: 12,
+  zoom: 13,
+  output_px: 800,
   num_frames: 2,
 };
 

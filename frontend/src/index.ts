@@ -133,8 +133,8 @@ app.get("/internal/jobs/:id", async (c) => {
     bbox: job.bbox,
     time_before: job.time_before,
     time_after: job.time_after,
-    min_zoom: job.min_zoom,
-    max_zoom: job.max_zoom,
+    zoom: job.zoom,
+    output_px: job.output_px,
     num_frames: job.num_frames,
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isValidEmail, validateJobInput } from "../src/validation";
+import { isValidEmail, suggestedZoom, validateJobInput } from "../src/validation";
 
 const MAX_AREA = 1.0;
 
@@ -7,8 +7,7 @@ const valid = {
   bbox: "-0.2,51.4,0.0,51.6",
   time_before: "2020-01-01T00:00:00Z",
   time_after: "2024-01-01T00:00:00Z",
-  min_zoom: "6",
-  max_zoom: "12",
+  output_px: "800",
   num_frames: "2",
 };
 
@@ -24,12 +23,13 @@ describe("isValidEmail", () => {
 });
 
 describe("validateJobInput", () => {
-  it("accepts and normalizes a valid submission", () => {
+  it("accepts and normalizes a valid submission, deriving zoom", () => {
     const res = validateJobInput(valid, MAX_AREA);
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.value.bbox).toBe("-0.2,51.4,0,51.6");
-      expect(res.value.min_zoom).toBe(6);
+      expect(res.value.output_px).toBe(800);
+      expect(res.value.zoom).toBe(suggestedZoom(-0.2, 51.4, 0.0, 51.6, 800));
       expect(res.value.num_frames).toBe(2);
       expect(res.value.time_before).toBe("2020-01-01T00:00:00Z");
     }
@@ -59,14 +59,30 @@ describe("validateJobInput", () => {
     expect(validateJobInput({ ...valid, time_before: "not-a-date" }, MAX_AREA).ok).toBe(false);
   });
 
-  it("rejects bad zoom ranges", () => {
-    expect(validateJobInput({ ...valid, min_zoom: "12", max_zoom: "6" }, MAX_AREA).ok).toBe(false);
-    expect(validateJobInput({ ...valid, max_zoom: "99" }, MAX_AREA).ok).toBe(false);
-    expect(validateJobInput({ ...valid, min_zoom: "6.5" }, MAX_AREA).ok).toBe(false);
+  it("rejects bad output sizes", () => {
+    expect(validateJobInput({ ...valid, output_px: "100" }, MAX_AREA).ok).toBe(false); // < SIZE_MIN
+    expect(validateJobInput({ ...valid, output_px: "5000" }, MAX_AREA).ok).toBe(false); // > SIZE_MAX
+    expect(validateJobInput({ ...valid, output_px: "800.5" }, MAX_AREA).ok).toBe(false);
   });
 
   it("rejects bad frame counts", () => {
     expect(validateJobInput({ ...valid, num_frames: "1" }, MAX_AREA).ok).toBe(false);
     expect(validateJobInput({ ...valid, num_frames: "999" }, MAX_AREA).ok).toBe(false);
+  });
+});
+
+describe("suggestedZoom", () => {
+  it("increases with target size and decreases with area", () => {
+    const small = suggestedZoom(-0.2, 51.4, 0.0, 51.6, 800);
+    const bigger = suggestedZoom(-0.2, 51.4, 0.0, 51.6, 1600);
+    expect(bigger).toBeGreaterThanOrEqual(small);
+    const wideArea = suggestedZoom(-2, 50, 2, 54, 800);
+    expect(wideArea).toBeLessThan(small);
+  });
+
+  it("clamps to the allowed zoom range", () => {
+    const z = suggestedZoom(-0.0001, 51.5, 0.0001, 51.5001, 2000);
+    expect(z).toBeLessThanOrEqual(18);
+    expect(z).toBeGreaterThanOrEqual(2);
   });
 });

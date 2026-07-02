@@ -5,8 +5,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   bbox          TEXT NOT NULL,          -- "left,bottom,right,top"
   time_before   TEXT NOT NULL,          -- ISO-8601
   time_after    TEXT NOT NULL,          -- ISO-8601
-  min_zoom      INTEGER NOT NULL,
-  max_zoom      INTEGER NOT NULL,
+  zoom          INTEGER NOT NULL,       -- derived from bbox + output_px
+  output_px     INTEGER NOT NULL,       -- longest side of the delivered GIF
   num_frames    INTEGER NOT NULL,
   status        TEXT NOT NULL DEFAULT 'queued'
                   CHECK (status IN ('queued','running','done','failed')),
