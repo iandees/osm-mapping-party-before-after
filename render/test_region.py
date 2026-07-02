@@ -75,6 +75,27 @@ class TestSelectRegion(unittest.TestCase):
         with self.assertRaises(NoCoveringRegion):
             select_region(INDEX, (100, -80, 120, -60))
 
+    def test_uses_polygon_shape_not_bounding_box(self):
+        # "west-virginia": an L-shape excluding the bottom-right quadrant, with a
+        # SMALLER bounding box than "virginia". A point in that excluded quadrant is
+        # inside WV's bbox but outside its polygon — it must select virginia.
+        wv = {
+            "type": "Feature",
+            "id": "us/west-virginia",
+            "properties": {
+                "id": "west-virginia",
+                "urls": {"history": "https://osm-internal.download.geofabrik.de/us/west-virginia-internal.osh.pbf"},
+            },
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[0, 0], [4, 0], [4, 4], [8, 4], [8, 8], [0, 8], [0, 0]]],
+            },
+        }
+        va = rect("us/virginia", 2, -2, 12, 6)  # larger bbox, but a real rectangle
+        index = {"type": "FeatureCollection", "features": [wv, va]}
+        feature = select_region(index, (5.9, 1.9, 6.1, 2.1))  # in WV's bbox, not its shape
+        self.assertEqual(feature["id"], "us/virginia")
+
     def test_history_url(self):
         feature = select_region(INDEX, (-0.2, 51.4, 0.0, 51.6))
         self.assertEqual(

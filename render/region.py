@@ -1,12 +1,13 @@
 """Select the smallest Geofabrik region whose extent covers a bounding box.
 
-Geofabrik publishes an ``index-v1.json`` GeoJSON FeatureCollection; each feature's
-``id`` is the region path (e.g. ``europe/great-britain/england``) used to build the
-download URL. We pick the region with the smallest geometry bounding box that fully
-contains the requested bbox. Using the geometry's bbox (rather than exact
-point-in-polygon) is a deliberate, simple heuristic: it can over-select a slightly
-larger region, which is safe — the subsequent ``osmium extract`` clips to the exact
-bbox anyway.
+Geofabrik publishes an ``index-v1.json`` GeoJSON FeatureCollection. We pick the
+smallest region whose *actual polygon* contains the requested bbox, then download
+its ``urls.history`` file.
+
+We test true polygon containment (not just the geometry's bounding box) because
+region shapes are irregular: e.g. West Virginia's bounding box reaches east into
+Virginia, so a bbox-only test would pick WV for a Virginia point and the extract
+would come back empty. The geometry bbox is still used as a cheap pre-filter.
 """
 
 from __future__ import annotations
@@ -51,11 +52,46 @@ def _covers(region_bbox, request_bbox) -> bool:
     return rl <= l and rb <= b and rr >= r and rt >= t
 
 
-def select_region(index: dict, bbox: tuple[float, float, float, float]) -> dict:
-    """Return the GeoJSON feature of the smallest region covering ``bbox``.
+def _point_in_ring(x: float, y: float, ring) -> bool:
+    """Ray-casting point-in-ring test for a linear ring of [lon, lat] positions."""
+    inside = False
+    n = len(ring)
+    j = n - 1
+    for i in range(n):
+        xi, yi = ring[i][0], ring[i][1]
+        xj, yj = ring[j][0], ring[j][1]
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+            inside = not inside
+        j = i
+    return inside
 
-    ``bbox`` is (left, bottom, right, top). Raises NoCoveringRegion if none cover it.
+
+def _point_in_polygon(x: float, y: float, polygon) -> bool:
+    """A GeoJSON Polygon: first ring is the outer boundary, the rest are holes."""
+    if not polygon or not _point_in_ring(x, y, polygon[0]):
+        return False
+    return not any(_point_in_ring(x, y, hole) for hole in polygon[1:])
+
+
+def _point_in_geometry(x: float, y: float, geometry: dict) -> bool:
+    gtype = geometry.get("type")
+    coords = geometry.get("coordinates")
+    if gtype == "Polygon":
+        return _point_in_polygon(x, y, coords)
+    if gtype == "MultiPolygon":
+        return any(_point_in_polygon(x, y, poly) for poly in coords)
+    return False
+
+
+def select_region(index: dict, bbox: tuple[float, float, float, float]) -> dict:
+    """Return the GeoJSON feature of the smallest region whose polygon covers ``bbox``.
+
+    ``bbox`` is (left, bottom, right, top). The bbox's four corners (and centre)
+    must all lie within the region's actual polygon. Raises NoCoveringRegion if
+    none qualify.
     """
+    l, b, r, t = bbox
+    probes = [(l, b), (r, b), (r, t), (l, t), ((l + r) / 2, (b + t) / 2)]
     best: dict | None = None
     best_area = float("inf")
     for feature in index.get("features", []):
@@ -67,7 +103,9 @@ def select_region(index: dict, bbox: tuple[float, float, float, float]) -> dict:
         except ValueError:
             continue
         if not _covers(rb, bbox):
-            continue
+            continue  # cheap bbox pre-filter
+        if not all(_point_in_geometry(x, y, geometry) for x, y in probes):
+            continue  # exact polygon containment
         area = (rb[2] - rb[0]) * (rb[3] - rb[1])
         if area < best_area:
             best_area = area
