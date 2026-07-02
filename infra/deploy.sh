@@ -11,12 +11,26 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 set -a; . "$ROOT/frontend/.deploy.secrets"; set +a
 
-uv run --with awscli aws --profile openaddresses --region us-east-1 cloudformation deploy \
+AWS="uv run --with awscli aws --profile openaddresses --region us-east-1"
+
+# A stack left in ROLLBACK_COMPLETE (or a failed initial create) cannot be updated;
+# delete the empty shell before recreating.
+status=$($AWS cloudformation describe-stacks --stack-name osm-before-after \
+  --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NONE)
+case "$status" in
+  ROLLBACK_COMPLETE|CREATE_FAILED|REVIEW_IN_PROGRESS)
+    echo "Stack is $status; deleting empty shell before recreating..."
+    $AWS cloudformation delete-stack --stack-name osm-before-after
+    $AWS cloudformation wait stack-delete-complete --stack-name osm-before-after
+    ;;
+esac
+
+$AWS cloudformation deploy \
   --template-file "$ROOT/infra/template.yaml" \
   --stack-name osm-before-after \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
-    "Subnets=subnet-de35c1f5\,subnet-35d87242\,subnet-b978ade0" \
+    "Subnets=subnet-de35c1f5,subnet-35d87242,subnet-b978ade0" \
     "SecurityGroupId=sg-c08193a5" \
     "WorkerBaseUrl=https://beforeafter.mapki.com" \
     "R2Endpoint=https://abb981ba94fd6c090352b253fe594676.r2.cloudflarestorage.com" \
