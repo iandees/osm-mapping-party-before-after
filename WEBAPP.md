@@ -14,7 +14,7 @@ Browser ─ Cloudflare Worker (Hono) ─ D1 (jobs) , R2 (results)
            SQS ─ EventBridge Pipe ─ Batch SubmitJob (Fargate task)
                                         │ render (make.sh + task-local Postgres)
                                         │ region history cached in S3
-                                        │ upload GIF(s) → R2
+                                        │ downscale → upload GIF → R2
                                         ▼
                           callback → Worker /internal/* (shared secret)
                                         │ mark done + email result link
@@ -98,6 +98,18 @@ stale cache never silently drops recent edits. The system does **not** apply OSM
 replication diffs to "catch up" a file — it relies on Geofabrik's daily rebuild. A
 request whose *after* time is within the last day may therefore render against
 data up to ~24h old (logged as a warning); it will not fail.
+
+## Output size
+
+The user picks an **output image size** (longest side, `SIZE_MIN`–`SIZE_MAX` px,
+default `SIZE_DEFAULT`), not a zoom. From the drawn bbox and that size the frontend
+previews — and the server authoritatively computes (`suggestedZoom`) — the integer
+Web-Mercator zoom whose render is at least that many pixels on its longer side. A
+single GIF is rendered at that zoom, then the render task downscales it to the
+requested size (`gm convert -resize`). This keeps GIF dimensions/file size bounded
+and, because the derived zoom follows a bounded target, keeps the intermediate
+render bounded too (no OOM guard needed). `MAX_BBOX_AREA` still caps bbox area to
+bound data-extraction cost.
 
 ## Notes
 
