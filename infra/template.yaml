@@ -1,0 +1,304 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Scale-to-zero render backend for the OSM before/after GIF app. A Cloudflare
+  Worker sends the job id to SQS; an EventBridge Pipe submits an AWS Batch
+  (Fargate) job that renders the GIF, caches region history in S3, uploads results
+  to R2, and calls back to the Worker.
+
+Parameters:
+  ImageTag:
+    Type: String
+    Default: latest
+    Description: Tag of the render image pushed to the created ECR repository.
+  Subnets:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for Fargate tasks (must have outbound internet, e.g. public subnets or private+NAT).
+  SecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group allowing outbound HTTPS for the render tasks.
+  WorkerBaseUrl:
+    Type: String
+    Description: Public base URL of the Cloudflare Worker (for /internal callbacks).
+  R2Endpoint:
+    Type: String
+    Description: Cloudflare R2 S3 API endpoint (https://<account>.r2.cloudflarestorage.com).
+  R2Bucket:
+    Type: String
+    Description: R2 bucket name for result GIFs.
+  TaskVcpu:
+    Type: String
+    Default: "2"
+  TaskMemory:
+    Type: String
+    Default: "8192"
+  EphemeralStorageGiB:
+    Type: Number
+    Default: 100
+    MinValue: 21
+    MaxValue: 200
+    Description: Fargate ephemeral storage (region history extracts can be large; max 200).
+  RegionCacheRetentionDays:
+    Type: Number
+    Default: 30
+
+  # Secrets (NoEcho). Stored in Secrets Manager and injected into the task.
+  GeofabrikUser:
+    Type: String
+    NoEcho: true
+  GeofabrikPassword:
+    Type: String
+    NoEcho: true
+  R2AccessKeyId:
+    Type: String
+    NoEcho: true
+  R2SecretAccessKey:
+    Type: String
+    NoEcho: true
+  CallbackSecret:
+    Type: String
+    NoEcho: true
+    Description: Shared secret the render task presents to the Worker's /internal API.
+
+Resources:
+  # ---- Image registry -------------------------------------------------
+  RenderRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${AWS::StackName}-render"
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  # ---- Region history cache ------------------------------------------
+  RegionCacheBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-region-cache-${AWS::AccountId}"
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-region-extracts
+            Status: Enabled
+            ExpirationInDays: !Ref RegionCacheRetentionDays
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ---- Secrets --------------------------------------------------------
+  RenderSecrets:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}-render-secrets"
+      SecretString: !Sub |
+        {
+          "GEOFABRIK_USER": "${GeofabrikUser}",
+          "GEOFABRIK_PASSWORD": "${GeofabrikPassword}",
+          "R2_ACCESS_KEY_ID": "${R2AccessKeyId}",
+          "R2_SECRET_ACCESS_KEY": "${R2SecretAccessKey}",
+          "CALLBACK_SECRET": "${CallbackSecret}"
+        }
+
+  # ---- Queues ---------------------------------------------------------
+  RenderDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${AWS::StackName}-render-dlq"
+      MessageRetentionPeriod: 1209600
+
+  RenderQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${AWS::StackName}-render"
+      VisibilityTimeout: 43200
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt RenderDLQ.Arn
+        maxReceiveCount: 3
+
+  # ---- IAM roles ------------------------------------------------------
+  BatchExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-secrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref RenderSecrets
+
+  BatchJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: region-cache-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "${RegionCacheBucket.Arn}/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt RegionCacheBucket.Arn
+
+  PipeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: pipes.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: pipe-sqs-to-batch
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]
+                Resource: !GetAtt RenderQueue.Arn
+              - Effect: Allow
+                Action: batch:SubmitJob
+                Resource:
+                  - !Ref RenderJobDefinition
+                  - !Ref RenderJobQueue
+
+  # ---- Batch compute --------------------------------------------------
+  ComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    Properties:
+      Type: MANAGED
+      State: ENABLED
+      ComputeResources:
+        Type: FARGATE
+        MaxvCpus: 16
+        Subnets: !Ref Subnets
+        SecurityGroupIds: [!Ref SecurityGroupId]
+
+  RenderJobQueue:
+    Type: AWS::Batch::JobQueue
+    Properties:
+      Priority: 1
+      State: ENABLED
+      ComputeEnvironmentOrder:
+        - Order: 1
+          ComputeEnvironment: !Ref ComputeEnvironment
+
+  RenderJobDefinition:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      Type: container
+      PlatformCapabilities: [FARGATE]
+      ContainerProperties:
+        Image: !Sub "${RenderRepo.RepositoryUri}:${ImageTag}"
+        Command: ["render/entrypoint.sh"]
+        ExecutionRoleArn: !GetAtt BatchExecutionRole.Arn
+        JobRoleArn: !GetAtt BatchJobRole.Arn
+        NetworkConfiguration:
+          AssignPublicIp: ENABLED
+        FargatePlatformConfiguration:
+          PlatformVersion: LATEST
+        EphemeralStorage:
+          SizeInGiB: !Ref EphemeralStorageGiB
+        ResourceRequirements:
+          - Type: VCPU
+            Value: !Ref TaskVcpu
+          - Type: MEMORY
+            Value: !Ref TaskMemory
+        Environment:
+          - Name: APP_ROOT
+            Value: /home/postgres
+          - Name: WORKER_BASE_URL
+            Value: !Ref WorkerBaseUrl
+          - Name: REGION_CACHE_BUCKET
+            Value: !Ref RegionCacheBucket
+          - Name: GEOFABRIK_INTERNAL_BASE
+            Value: https://osm-internal.download.geofabrik.de
+          - Name: GEOFABRIK_INDEX_URL
+            Value: https://osm-internal.download.geofabrik.de/index-v1.json
+          - Name: GEOFABRIK_COOKIE_URL
+            Value: https://osm-internal.download.geofabrik.de/get_cookie
+          - Name: R2_ENDPOINT
+            Value: !Ref R2Endpoint
+          - Name: R2_BUCKET
+            Value: !Ref R2Bucket
+        Secrets:
+          - Name: GEOFABRIK_USER
+            ValueFrom: !Sub "${RenderSecrets}:GEOFABRIK_USER::"
+          - Name: GEOFABRIK_PASSWORD
+            ValueFrom: !Sub "${RenderSecrets}:GEOFABRIK_PASSWORD::"
+          - Name: R2_ACCESS_KEY_ID
+            ValueFrom: !Sub "${RenderSecrets}:R2_ACCESS_KEY_ID::"
+          - Name: R2_SECRET_ACCESS_KEY
+            ValueFrom: !Sub "${RenderSecrets}:R2_SECRET_ACCESS_KEY::"
+          - Name: CALLBACK_SECRET
+            ValueFrom: !Sub "${RenderSecrets}:CALLBACK_SECRET::"
+
+  # ---- SQS -> Batch pipe ---------------------------------------------
+  RenderPipe:
+    Type: AWS::Pipes::Pipe
+    Properties:
+      Name: !Sub "${AWS::StackName}-render-pipe"
+      RoleArn: !GetAtt PipeRole.Arn
+      Source: !GetAtt RenderQueue.Arn
+      SourceParameters:
+        SqsQueueParameters:
+          BatchSize: 1
+      Target: !Ref RenderJobQueue
+      TargetParameters:
+        BatchJobParameters:
+          JobDefinition: !Ref RenderJobDefinition
+          JobName: !Sub "${AWS::StackName}-render"
+          ContainerOverrides:
+            Environment:
+              # The SQS message body is the bare job id; inject it as JOB_ID.
+              - Name: JOB_ID
+                Value: "$.body"
+
+  # ---- Scoped IAM user for the Worker (sqs:SendMessage only) ----------
+  WorkerUser:
+    Type: AWS::IAM::User
+    Properties:
+      Policies:
+        - PolicyName: send-render-messages
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt RenderQueue.Arn
+
+  WorkerAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref WorkerUser
+
+Outputs:
+  EcrRepositoryUri:
+    Description: Push the render image here.
+    Value: !GetAtt RenderRepo.RepositoryUri
+  QueueUrl:
+    Description: Set as the Worker's SQS_QUEUE_URL.
+    Value: !Ref RenderQueue
+  WorkerAccessKeyId:
+    Description: Set as the Worker's AWS_ACCESS_KEY_ID (wrangler secret).
+    Value: !Ref WorkerAccessKey
+  WorkerSecretAccessKey:
+    Description: Set as the Worker's AWS_SECRET_ACCESS_KEY (wrangler secret). Sensitive.
+    Value: !GetAtt WorkerAccessKey.SecretAccessKey
