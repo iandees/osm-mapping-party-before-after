@@ -6,9 +6,10 @@ compatibility_flags = ["nodejs_compat"]
 # Public, non-secret configuration. Secrets are set with `wrangler secret put`:
 #   SECRET_KEY, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, CALLBACK_SECRET
 [vars]
-PUBLIC_BASE_URL = "https://osm-before-after.example.workers.dev"
-MAIL_FROM = "noreply@example.com"
+PUBLIC_BASE_URL = "https://beforeafter.mapki.com"
+MAIL_FROM = "ian@mapki.com"
 AWS_REGION = "us-east-1"
+# Set from the CloudFormation `QueueUrl` output after deploying infra/.
 SQS_QUEUE_URL = ""
 # Max bbox area in square degrees (guards against huge, expensive renders).
 MAX_BBOX_AREA = "1.0"
