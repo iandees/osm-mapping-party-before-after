@@ -149,6 +149,9 @@ def ensure_region_file(feature: dict, time_after: str) -> str:
 
 
 def run_make(history_file: str, params: dict) -> None:
+    # A single zoom is rendered (min == max), chosen by the frontend from the bbox
+    # and requested output size.
+    zoom = str(params["zoom"])
     subprocess.run(
         [
             os.path.join(ROOT, "make.sh"),
@@ -156,8 +159,8 @@ def run_make(history_file: str, params: dict) -> None:
             params["time_before"],
             params["time_after"],
             params["bbox"],
-            str(params["min_zoom"]),
-            str(params["max_zoom"]),
+            zoom,
+            zoom,
             str(params["num_frames"]),
         ],
         cwd=ROOT,
@@ -165,8 +168,18 @@ def run_make(history_file: str, params: dict) -> None:
     )
 
 
-def upload_results(job_id: str) -> str:
-    """Upload every progress GIF to R2 under jobs/<id>/ and return the key prefix."""
+def downscale_gif(path: str, longest_px: int) -> None:
+    """Shrink an animated GIF so its longer side is at most `longest_px` (in place)."""
+    out = path + ".resized.gif"
+    subprocess.run(
+        ["gm", "convert", path, "-coalesce", "-resize", f"{longest_px}x{longest_px}>", out],
+        check=True,
+    )
+    os.replace(out, path)
+
+
+def upload_results(job_id: str, output_px: int) -> str:
+    """Downscale and upload the produced GIF to R2 under jobs/<id>/; return the prefix."""
     r2 = boto3.client(
         "s3",
         endpoint_url=env("R2_ENDPOINT"),
@@ -180,6 +193,7 @@ def upload_results(job_id: str) -> str:
     if not gifs:
         raise RuntimeError("make.sh produced no GIFs")
     for path in gifs:
+        downscale_gif(path, output_px)
         key = prefix + os.path.basename(path)
         r2.upload_file(path, bucket, key, ExtraArgs={"ContentType": "image/gif"})
         print(f"uploaded {key}")
@@ -199,7 +213,7 @@ def main() -> int:
 
         history_file = ensure_region_file(feature, params["time_after"])
         run_make(history_file, params)
-        prefix = upload_results(job_id)
+        prefix = upload_results(job_id, int(params["output_px"]))
 
         worker.post_status(status="done", resultKey=prefix)
         return 0
