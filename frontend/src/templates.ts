@@ -31,6 +31,9 @@ function layout(title: string, body: string, head = ""): string {
   .row > div { flex: 1 1 10rem; }
   .error { color: #b00020; }
   .muted { color: #666; }
+  .presets { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0.5rem 0 0; }
+  .presets a { display: inline-block; padding: 0.2rem 0.6rem; border: 1px solid #ccc; border-radius: 999px; font-size: 0.85rem; text-decoration: none; color: inherit; }
+  .presets a:hover { border-color: #e6007e; color: #e6007e; }
   #map { height: 380px; margin-top: 0.5rem; border: 1px solid #ccc; }
   img.result { max-width: 100%; border: 1px solid #ccc; margin: 0.5rem 0; display: block; }
   .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; margin: 1rem 0; }
@@ -132,6 +135,13 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
       <input id="time_after" name="time_after" type="datetime-local" required>
     </div>
   </div>
+  <p class="presets" id="presets">
+    <span class="muted">Quick range (ending now):</span>
+    <a href="#" data-preset="10y">10 years</a>
+    <a href="#" data-preset="1y">1 year</a>
+    <a href="#" data-preset="1mo">1 month</a>
+    <a href="#" data-preset="6h">6 hours</a>
+  </p>
 
   <div class="row">
     <div>
@@ -194,6 +204,46 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
   }
   map.on(L.Draw.Event.CREATED, e => setBbox(e.layer));
   document.getElementById('output_px').addEventListener('input', updateZoomHint);
+
+  // Format a Date as the local value a datetime-local input expects (YYYY-MM-DDTHH:MM).
+  function toLocalInput(d) {
+    const p = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+      'T' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  // Set Before/After to [now - amount·unit, now]. Exposed as window.applyRange so any
+  // range can be applied from the console, e.g. applyRange(3, 'mo') or applyRange(90, 'd').
+  function applyRange(amount, unit) {
+    const after = new Date();
+    const before = new Date(after);
+    const setters = {
+      y:  () => before.setFullYear(before.getFullYear() - amount),
+      mo: () => before.setMonth(before.getMonth() - amount),
+      w:  () => before.setDate(before.getDate() - amount * 7),
+      d:  () => before.setDate(before.getDate() - amount),
+      h:  () => before.setHours(before.getHours() - amount),
+      m:  () => before.setMinutes(before.getMinutes() - amount),
+    };
+    const apply = setters[unit];
+    if (!apply) throw new Error('Unknown unit: ' + unit + ' (use y, mo, w, d, h, m)');
+    apply();
+    document.getElementById('time_before').value = toLocalInput(before);
+    document.getElementById('time_after').value = toLocalInput(after);
+  }
+  window.applyRange = applyRange;
+
+  // Preset links carry a "<amount><unit>" token, e.g. "10y" or "6h".
+  function applyPreset(preset) {
+    const m = /^(\\d+)(y|mo|w|d|h|m)$/.exec(preset);
+    if (!m) throw new Error('Bad preset: ' + preset);
+    applyRange(Number(m[1]), m[2]);
+  }
+  document.getElementById('presets').addEventListener('click', e => {
+    const a = e.target.closest('a[data-preset]');
+    if (!a) return;
+    e.preventDefault();
+    applyPreset(a.dataset.preset);
+  });
   document.getElementById('jobform').addEventListener('submit', e => {
     if (!document.getElementById('bbox').value) {
       e.preventDefault();
