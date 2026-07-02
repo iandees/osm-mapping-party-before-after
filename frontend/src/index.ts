@@ -14,6 +14,7 @@ import {
   countActiveJobsByEmail,
   createJob,
   createLoginToken,
+  deleteJob,
   failStuckJobs,
   getDoneJobsByEmail,
   getJob,
@@ -113,7 +114,25 @@ app.post("/submit", requireSession(), async (c) => {
 app.get("/jobs/:id", async (c) => {
   const job = await getJob(c.env.DB, c.req.param("id"));
   if (!job) return c.notFound();
-  return c.html(jobPage(job));
+  const session = await verifySession(getCookie(c, SESSION_COOKIE), c.env.SECRET_KEY);
+  return c.html(jobPage(job, session?.email === job.email));
+});
+
+// ---- Delete a render (owner only) -------------------------------------
+app.post("/jobs/:id/delete", requireSession(), async (c) => {
+  const email = c.get("email");
+  // Ownership is enforced in SQL; a missing or non-owned job returns null.
+  const deleted = await deleteJob(c.env.DB, c.req.param("id"), email);
+  if (!deleted) return c.notFound();
+  if (deleted.result_key) {
+    try {
+      await c.env.RESULTS.delete(deleted.result_key);
+    } catch (e) {
+      // The row is already gone; a dangling R2 object is harmless (nothing links it).
+      console.error("R2 delete failed", e);
+    }
+  }
+  return c.redirect("/", 302);
 });
 
 app.get("/jobs/:id/status", async (c) => {

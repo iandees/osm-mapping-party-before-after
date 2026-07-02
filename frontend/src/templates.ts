@@ -34,8 +34,14 @@ function layout(title: string, body: string, head = ""): string {
   #map { height: 380px; margin-top: 0.5rem; border: 1px solid #ccc; }
   img.result { max-width: 100%; border: 1px solid #ccc; margin: 0.5rem 0; display: block; }
   .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; margin: 1rem 0; }
+  .gallery .card { position: relative; }
   .gallery a { display: block; border: 1px solid #ccc; border-radius: 6px; overflow: hidden; }
   .gallery img { width: 100%; height: 140px; object-fit: cover; display: block; }
+  .gallery .del { position: absolute; top: 4px; right: 4px; margin: 0; }
+  .gallery .del button { padding: 0; width: 1.6rem; height: 1.6rem; line-height: 1; border: none; border-radius: 50%;
+    background: rgba(0,0,0,0.6); color: #fff; font-size: 1.1rem; cursor: pointer; }
+  .gallery .del button:hover { background: #b00020; }
+  .delete-form { display: inline; margin: 0; }
   section.maps { margin-top: 2rem; border-top: 1px solid #ddd; padding-top: 1rem; }
 </style>
 ${head}
@@ -46,14 +52,29 @@ ${body}
 </html>`;
 }
 
-/** A responsive grid of finished maps, each linking to its job page. */
-function galleryGrid(jobs: Job[], heading: string): string {
+/** A small confirm-on-submit form that hard-deletes a job the owner controls. */
+function deleteForm(id: string, cssClass: string, label: string): string {
+  return (
+    `<form class="${cssClass}" method="post" action="/jobs/${esc(id)}/delete" ` +
+    `onsubmit="return confirm('Delete this map? This can\\'t be undone.')">` +
+    `<button type="submit" title="Delete this map" aria-label="Delete this map">${label}</button></form>`
+  );
+}
+
+/**
+ * A responsive grid of finished maps, each linking to its job page. When `owned`,
+ * each card also shows a delete control (used only for the signed-in user's own maps).
+ */
+function galleryGrid(jobs: Job[], heading: string, owned = false): string {
   const cards = jobs
     .filter((j) => j.result_key)
     .map(
       (j) =>
+        `<div class="card">` +
         `<a href="/jobs/${esc(j.id)}" title="${esc(j.bbox)} · ${esc(j.time_before)} → ${esc(j.time_after)}">` +
-        `<img loading="lazy" src="/r/${esc(j.result_key!)}" alt="before/after map"></a>`,
+        `<img loading="lazy" src="/r/${esc(j.result_key!)}" alt="before/after map"></a>` +
+        (owned ? deleteForm(j.id, "del", "×") : "") +
+        `</div>`,
     )
     .join("\n");
   if (!cards) return "";
@@ -180,19 +201,19 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
     }
   });
 </script>
-${galleryGrid(jobs, "Your maps")}`,
+${galleryGrid(jobs, "Your maps", true)}`,
     head,
   );
 }
 
-export function jobPage(job: Job): string {
+export function jobPage(job: Job, isOwner = false): string {
   if (job.status === "done" && job.result_key) {
     return layout(
       "Your map is ready",
       `<h1>Your before/after map</h1>
 <p class="muted">${esc(job.bbox)} · ${esc(job.time_before)} → ${esc(job.time_after)}</p>
 <img class="result" src="/r/${esc(job.result_key)}" alt="animated before/after map">
-<p><a href="/">Make another</a></p>`,
+<p><a href="/">Make another</a>${isOwner ? ` · ${deleteForm(job.id, "delete-form", "Delete this map")}` : ""}</p>`,
     );
   }
 

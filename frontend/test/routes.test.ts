@@ -3,6 +3,29 @@ import { beforeEach, describe, it, expect, vi, afterEach } from "vitest";
 import { app } from "../src/index";
 import { createJob, createLoginToken, getJob, markJobDone, markJobRunning } from "../src/db";
 
+/** Log in as `email` and return the session cookie header value. */
+async function sessionCookie(e: Parameters<typeof app.request>[2], email: string): Promise<string> {
+  const token = await createLoginToken(env.DB, email, 900);
+  const verify = await app.request(`/verify/${token}`, {}, e);
+  return (verify.headers.get("set-cookie") ?? "").split(";")[0];
+}
+
+/** Create a finished job (with a result_key) owned by `email`. */
+async function doneJob(email: string) {
+  const job = await createJob(env.DB, {
+    email,
+    bbox: "-0.2,51.4,0,51.6",
+    time_before: "2020-01-01T00:00:00Z",
+    time_after: "2024-01-01T00:00:00Z",
+    zoom: 12,
+    output_px: 400,
+    num_frames: 2,
+  });
+  await markJobRunning(env.DB, job.id);
+  await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`);
+  return job;
+}
+
 // Build a test env: real D1/R2 bindings from the pool, plus stubbed EMAIL, AWS
 // config, and secrets that aren't provided by wrangler vars in tests.
 function testEnv(overrides: Record<string, unknown> = {}) {
@@ -179,6 +202,60 @@ describe("verify + submit", () => {
       e,
     );
     expect(res.status).toBe(400);
+  });
+});
+
+describe("delete render", () => {
+  function delReq(id: string, headers: Record<string, string>) {
+    return new Request(`https://app.example.com/jobs/${id}/delete`, { method: "POST", headers });
+  }
+
+  it("lets the owner delete their render and removes the R2 object", async () => {
+    const del = vi.fn().mockResolvedValue(undefined);
+    const { env: e } = testEnv({ RESULTS: { delete: del } });
+    const cookie = await sessionCookie(e, "owner@example.com");
+    const job = await doneJob("owner@example.com");
+
+    const res = await app.request(delReq(job.id, { cookie }), {}, e);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/");
+    expect(await getJob(env.DB, job.id)).toBeNull();
+    expect(del).toHaveBeenCalledWith(`jobs/${job.id}/map.gif`);
+  });
+
+  it("does not let a non-owner delete someone else's render", async () => {
+    const del = vi.fn().mockResolvedValue(undefined);
+    const { env: e } = testEnv({ RESULTS: { delete: del } });
+    const cookie = await sessionCookie(e, "intruder@example.com");
+    const job = await doneJob("owner@example.com");
+
+    const res = await app.request(delReq(job.id, { cookie }), {}, e);
+    expect(res.status).toBe(404);
+    expect(await getJob(env.DB, job.id)).not.toBeNull();
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it("requires a session to delete", async () => {
+    const del = vi.fn().mockResolvedValue(undefined);
+    const { env: e } = testEnv({ RESULTS: { delete: del } });
+    const job = await doneJob("owner@example.com");
+
+    const res = await app.request(delReq(job.id, { accept: "application/json" }), {}, e);
+    expect(res.status).toBe(401);
+    expect(await getJob(env.DB, job.id)).not.toBeNull();
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it("shows a delete control to the owner on the job page but not to others", async () => {
+    const { env: e } = testEnv();
+    const cookie = await sessionCookie(e, "owner@example.com");
+    const job = await doneJob("owner@example.com");
+
+    const asOwner = await (await app.request(`/jobs/${job.id}`, { headers: { cookie } }, e)).text();
+    expect(asOwner).toContain(`/jobs/${job.id}/delete`);
+
+    const asAnon = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
+    expect(asAnon).not.toContain(`/jobs/${job.id}/delete`);
   });
 });
 

@@ -5,6 +5,7 @@ import {
   createLoginToken,
   consumeLoginToken,
   countActiveJobsByEmail,
+  deleteJob,
   failStuckJobs,
   getDoneJobsByEmail,
   getJob,
@@ -72,6 +73,26 @@ describe("job lifecycle", () => {
   it("cannot mark done a job that is not running", async () => {
     const job = await createJob(DB, sampleJob, 1000);
     expect(await markJobDone(DB, job.id, "k", 1200)).toBe(false); // still queued
+  });
+
+  it("deleteJob removes an owned job and returns its row", async () => {
+    const job = await createJob(DB, sampleJob, 1000);
+    await markJobRunning(DB, job.id, 1100);
+    await markJobDone(DB, job.id, "results/abc.gif", 1200);
+    const deleted = await deleteJob(DB, job.id, sampleJob.email);
+    expect(deleted?.id).toBe(job.id);
+    expect(deleted?.result_key).toBe("results/abc.gif");
+    expect(await getJob(DB, job.id)).toBeNull();
+  });
+
+  it("deleteJob refuses a job owned by someone else", async () => {
+    const job = await createJob(DB, sampleJob, 1000);
+    expect(await deleteJob(DB, job.id, "someone-else@example.com")).toBeNull();
+    expect(await getJob(DB, job.id)).not.toBeNull();
+  });
+
+  it("deleteJob returns null for an unknown id", async () => {
+    expect(await deleteJob(DB, "does-not-exist", sampleJob.email)).toBeNull();
   });
 
   it("transitions to failed from queued or running", async () => {

@@ -152,6 +152,23 @@ export async function getDoneJobsByEmail(
   return res.results ?? [];
 }
 
+/**
+ * Hard-delete a job the caller owns. Ownership is enforced in SQL (the email must
+ * match), so there is no fetch-then-check race. Returns the deleted row (including
+ * its `result_key`, so the caller can remove the R2 object) or null if no job with
+ * that id belongs to `email`.
+ */
+export async function deleteJob(
+  db: D1Database,
+  id: string,
+  email: string,
+): Promise<Job | null> {
+  return db
+    .prepare("DELETE FROM jobs WHERE id = ? AND email = ? RETURNING *")
+    .bind(id, email)
+    .first<Job>();
+}
+
 /** queued -> running. Returns true if the transition applied. */
 export async function markJobRunning(
   db: D1Database,
