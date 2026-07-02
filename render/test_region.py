@@ -11,10 +11,16 @@ from region import (
 
 
 def rect(id_, west, south, east, north):
+    leaf = id_.split("/")[-1]
     return {
         "type": "Feature",
         "id": id_,
-        "properties": {"id": id_},
+        "properties": {
+            "id": leaf,
+            "urls": {
+                "history": f"https://osm-internal.download.geofabrik.de/{id_}-internal.osh.pbf",
+            },
+        },
         "geometry": {
             "type": "Polygon",
             "coordinates": [[
@@ -72,9 +78,14 @@ class TestSelectRegion(unittest.TestCase):
     def test_history_url(self):
         feature = select_region(INDEX, (-0.2, 51.4, 0.0, 51.6))
         self.assertEqual(
-            region_history_url(feature, "https://osm-internal.download.geofabrik.de"),
+            region_history_url(feature),
             "https://osm-internal.download.geofabrik.de/europe/great-britain/england-internal.osh.pbf",
         )
+
+    def test_history_url_missing_raises(self):
+        feature = {"properties": {"id": "x", "urls": {}}}
+        with self.assertRaises(ValueError):
+            region_history_url(feature)
 
 
 if __name__ == "__main__":

@@ -78,14 +78,15 @@ def select_region(index: dict, bbox: tuple[float, float, float, float]) -> dict:
 
 
 def region_id(feature: dict) -> str:
-    """The region path id, e.g. 'europe/great-britain/england'."""
+    """The region's leaf id, e.g. 'bremen' (used only for logging)."""
     props = feature.get("properties") or {}
     return feature.get("id") or props.get("id")
 
 
-def region_history_url(feature: dict, internal_base: str) -> str:
-    """Build the internal history-file URL for a region feature."""
-    rid = region_id(feature)
-    if not rid:
-        raise ValueError("region feature has no id")
-    return f"{internal_base.rstrip('/')}/{rid}-internal.osh.pbf"
+def region_history_url(feature: dict) -> str:
+    """The internal full-history (.osh.pbf) URL, taken from the index's urls.history."""
+    urls = (feature.get("properties") or {}).get("urls") or {}
+    history = urls.get("history")
+    if not history:
+        raise ValueError(f"region {region_id(feature)} has no history URL in the index")
+    return history

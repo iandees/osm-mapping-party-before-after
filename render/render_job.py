@@ -24,6 +24,7 @@ import sys
 import tempfile
 import urllib.request
 from datetime import datetime
+from urllib.parse import urlparse
 
 import boto3
 import requests
@@ -117,9 +118,11 @@ def ensure_region_file(feature: dict, time_after: str) -> str:
     even a freshly downloaded file predates ``time_after`` (Geofabrik's daily lag),
     we proceed with the best available data.
     """
-    rid = region_id(feature)
-    cache_key = f"regions/{rid}.osh.pbf"
-    local = os.path.join(ROOT, f"{rid.replace('/', '_')}.osh.pbf")
+    history_url = region_history_url(feature)
+    # e.g. "europe/germany/bremen-internal.osh.pbf" — unique per region.
+    rel_path = urlparse(history_url).path.lstrip("/")
+    cache_key = f"regions/{rel_path}"
+    local = os.path.join(ROOT, rel_path.replace("/", "_"))
     want = _parse_iso(time_after)
 
     s3 = boto3.client("s3")
@@ -139,8 +142,7 @@ def ensure_region_file(feature: dict, time_after: str) -> str:
             return local
         print(f"region cache stale (data through {newest}); refreshing from Geofabrik")
 
-    url = region_history_url(feature, env("GEOFABRIK_INTERNAL_BASE", "https://osm-internal.download.geofabrik.de"))
-    download_from_geofabrik(url, local)
+    download_from_geofabrik(history_url, local)
     s3.upload_file(local, bucket, cache_key)
 
     fresh = newest_data_timestamp(local)
