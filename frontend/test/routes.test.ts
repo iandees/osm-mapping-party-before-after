@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, it, expect, vi, afterEach } from "vitest";
 import { app } from "../src/index";
-import { createLoginToken, getJob } from "../src/db";
+import { createJob, createLoginToken, getJob, markJobDone, markJobRunning } from "../src/db";
 
 // Build a test env: real D1/R2 bindings from the pool, plus stubbed EMAIL, AWS
 // config, and secrets that aren't provided by wrangler vars in tests.
@@ -40,6 +40,25 @@ describe("home", () => {
     const res = await app.request("/", {}, e);
     expect(res.status).toBe(200);
     expect(await res.text()).toMatch(/sign-in link/i);
+  });
+
+  it("shows a public gallery of recent finished maps", async () => {
+    const { env: e } = testEnv();
+    const job = await createJob(env.DB, {
+      email: "someone@example.com",
+      bbox: "-0.2,51.4,0,51.6",
+      time_before: "2020-01-01T00:00:00Z",
+      time_after: "2024-01-01T00:00:00Z",
+      zoom: 12,
+      output_px: 400,
+      num_frames: 2,
+    });
+    await markJobRunning(env.DB, job.id);
+    await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`);
+
+    const html = await (await app.request("/", {}, e)).text();
+    expect(html).toContain(`/r/jobs/${job.id}/map.gif`);
+    expect(html).toContain(`/jobs/${job.id}`);
   });
 });
 
@@ -219,6 +238,20 @@ describe("internal callbacks", () => {
     );
     expect(running.status).toBe(200);
     expect((await getJob(env.DB, id))?.status).toBe("running");
+
+    // A progress-only callback updates the message but not the status.
+    await app.request(
+      new Request(`https://app.example.com/internal/jobs/${id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-callback-secret": "callback-secret" },
+        body: JSON.stringify({ status: "progress", message: "Importing frame 2/2…" }),
+      }),
+      {},
+      e,
+    );
+    const mid = await getJob(env.DB, id);
+    expect(mid?.status).toBe("running");
+    expect(mid?.progress).toBe("Importing frame 2/2…");
 
     const done = await app.request(
       new Request(`https://app.example.com/internal/jobs/${id}`, {

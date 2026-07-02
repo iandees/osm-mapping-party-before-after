@@ -6,10 +6,13 @@ import {
   consumeLoginToken,
   countActiveJobsByEmail,
   failStuckJobs,
+  getDoneJobsByEmail,
   getJob,
+  getRecentDoneJobs,
   markJobDone,
   markJobFailed,
   markJobRunning,
+  updateJobProgress,
   type NewJob,
 } from "../src/db";
 
@@ -97,6 +100,33 @@ describe("job lifecycle", () => {
     const failed = await failStuckJobs(DB, 1000, 999999);
     expect(failed).toHaveLength(0);
     expect((await getJob(DB, job.id))?.status).toBe("done");
+  });
+
+  it("updates progress without changing status", async () => {
+    const job = await createJob(DB, sampleJob, 1000);
+    await markJobRunning(DB, job.id, 1100);
+    await updateJobProgress(DB, job.id, "Importing frame 3/24…");
+    const j = await getJob(DB, job.id);
+    expect(j?.status).toBe("running");
+    expect(j?.progress).toBe("Importing frame 3/24…");
+  });
+
+  it("lists recent done jobs (with result_key) globally and per email", async () => {
+    const a = await createJob(DB, { ...sampleJob, email: "a@x.com" }, 1000);
+    const b = await createJob(DB, { ...sampleJob, email: "b@x.com" }, 1000);
+    const pending = await createJob(DB, { ...sampleJob, email: "a@x.com" }, 1000);
+    await markJobRunning(DB, a.id, 1100);
+    await markJobDone(DB, a.id, "jobs/a/x.gif", 1200);
+    await markJobRunning(DB, b.id, 1100);
+    await markJobDone(DB, b.id, "jobs/b/x.gif", 1300);
+
+    const recent = await getRecentDoneJobs(DB, 10);
+    expect(recent.map((j) => j.id)).toEqual([b.id, a.id]); // newest finished first
+    expect(recent.every((j) => j.result_key)).toBe(true);
+
+    const mine = await getDoneJobsByEmail(DB, "a@x.com", 10);
+    expect(mine.map((j) => j.id)).toEqual([a.id]); // not b's, not the still-queued one
+    expect(pending.status).toBe("queued");
   });
 
   it("counts only active (queued/running) jobs per email", async () => {

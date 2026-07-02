@@ -13,7 +13,8 @@ export interface Job {
   num_frames: number;
   status: JobStatus;
   error: string | null;
-  result_key: string | null;
+  progress: string | null;
+  result_key: string | null; // full R2 object key of the finished GIF
   created_at: number;
   started_at: number | null;
   finished_at: number | null;
@@ -114,6 +115,41 @@ export async function countActiveJobsByEmail(
     .bind(email)
     .first<{ n: number }>();
   return row?.n ?? 0;
+}
+
+/** Update the free-text progress message (no status change). */
+export async function updateJobProgress(
+  db: D1Database,
+  id: string,
+  message: string,
+): Promise<void> {
+  await db.prepare("UPDATE jobs SET progress = ? WHERE id = ?").bind(message, id).run();
+}
+
+/** Recent finished jobs across all users, for the public gallery. */
+export async function getRecentDoneJobs(db: D1Database, limit: number): Promise<Job[]> {
+  const res = await db
+    .prepare(
+      "SELECT * FROM jobs WHERE status = 'done' AND result_key IS NOT NULL ORDER BY finished_at DESC LIMIT ?",
+    )
+    .bind(limit)
+    .all<Job>();
+  return res.results ?? [];
+}
+
+/** Recent finished jobs for one email, for the signed-in user's own maps. */
+export async function getDoneJobsByEmail(
+  db: D1Database,
+  email: string,
+  limit: number,
+): Promise<Job[]> {
+  const res = await db
+    .prepare(
+      "SELECT * FROM jobs WHERE email = ? AND status = 'done' AND result_key IS NOT NULL ORDER BY finished_at DESC LIMIT ?",
+    )
+    .bind(email, limit)
+    .all<Job>();
+  return res.results ?? [];
 }
 
 /** queued -> running. Returns true if the transition applied. */

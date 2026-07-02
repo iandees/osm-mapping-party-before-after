@@ -7,7 +7,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export const ZOOM_MIN = 2;
 export const ZOOM_MAX = 18;
 export const FRAMES_MIN = 2;
-export const FRAMES_MAX = 12;
+export const FRAMES_MAX = 24;
 
 // Output image size (longest side, px). The user picks the size; the zoom is
 // derived from their bbox. Bounding the size bounds both the final GIF and the

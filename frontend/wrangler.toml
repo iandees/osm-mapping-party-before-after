@@ -16,7 +16,8 @@ MAX_BBOX_AREA = "1.0"
 # Max concurrent non-terminal jobs (queued/running) per email address.
 MAX_ACTIVE_JOBS_PER_EMAIL = "3"
 # Jobs still queued/running after this many seconds are failed by the reaper.
-STUCK_JOB_TIMEOUT_SECONDS = "2700"
+# Generous, since 24-frame renders of larger areas can take a while.
+STUCK_JOB_TIMEOUT_SECONDS = "5400"
 
 # Scheduled reaper for stuck jobs.
 [triggers]

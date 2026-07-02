@@ -33,6 +33,10 @@ function layout(title: string, body: string, head = ""): string {
   .muted { color: #666; }
   #map { height: 380px; margin-top: 0.5rem; border: 1px solid #ccc; }
   img.result { max-width: 100%; border: 1px solid #ccc; margin: 0.5rem 0; display: block; }
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; margin: 1rem 0; }
+  .gallery a { display: block; border: 1px solid #ccc; border-radius: 6px; overflow: hidden; }
+  .gallery img { width: 100%; height: 140px; object-fit: cover; display: block; }
+  section.maps { margin-top: 2rem; border-top: 1px solid #ddd; padding-top: 1rem; }
 </style>
 ${head}
 </head>
@@ -42,17 +46,33 @@ ${body}
 </html>`;
 }
 
-export function loginPage(error?: string): string {
+/** A responsive grid of finished maps, each linking to its job page. */
+function galleryGrid(jobs: Job[], heading: string): string {
+  const cards = jobs
+    .filter((j) => j.result_key)
+    .map(
+      (j) =>
+        `<a href="/jobs/${esc(j.id)}" title="${esc(j.bbox)} · ${esc(j.time_before)} → ${esc(j.time_after)}">` +
+        `<img loading="lazy" src="/r/${esc(j.result_key!)}" alt="before/after map"></a>`,
+    )
+    .join("\n");
+  if (!cards) return "";
+  return `<section class="maps"><h2 style="font-size:1.1rem">${esc(heading)}</h2>
+<div class="gallery">${cards}</div></section>`;
+}
+
+export function loginPage(error?: string, recent: Job[] = []): string {
   return layout(
     "Sign in — OSM before/after",
     `<h1>OSM before/after map</h1>
-<p>Enter your email and we'll send you a one-time sign-in link.</p>
+<p>See how an area of OpenStreetMap changed over time. Sign in with your email to make your own.</p>
 ${error ? `<p class="error">${esc(error)}</p>` : ""}
 <form method="post" action="/login">
   <label for="email">Email</label>
   <input id="email" name="email" type="email" required autocomplete="email">
   <button type="submit">Send sign-in link</button>
-</form>`,
+</form>
+${galleryGrid(recent, "Recently created maps")}`,
   );
 }
 
@@ -64,7 +84,7 @@ export function checkEmailPage(email: string): string {
   );
 }
 
-export function formPage(email: string, error?: string): string {
+export function formPage(email: string, jobs: Job[] = [], error?: string): string {
   const head = `
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css">
@@ -159,22 +179,19 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
       alert('Please draw a rectangle on the map first.');
     }
   });
-</script>`,
+</script>
+${galleryGrid(jobs, "Your maps")}`,
     head,
   );
 }
 
-export function jobPage(job: Job, resultKeys: string[]): string {
-  if (job.status === "done") {
-    const imgs = resultKeys
-      .sort()
-      .map((k) => `<img class="result" src="/r/${esc(k)}" alt="animated map">`)
-      .join("\n");
+export function jobPage(job: Job): string {
+  if (job.status === "done" && job.result_key) {
     return layout(
       "Your map is ready",
       `<h1>Your before/after map</h1>
 <p class="muted">${esc(job.bbox)} · ${esc(job.time_before)} → ${esc(job.time_after)}</p>
-${imgs || "<p>No images were produced.</p>"}
+<img class="result" src="/r/${esc(job.result_key)}" alt="animated before/after map">
 <p><a href="/">Make another</a></p>`,
     );
   }
@@ -192,6 +209,7 @@ ${imgs || "<p>No images were produced.</p>"}
   return layout(
     "Working on your map",
     `<h1>Building your map…</h1>
+<p><strong id="progress">${esc(job.progress ?? "Waiting to start…")}</strong></p>
 <p class="muted">Status: <span id="status">${esc(job.status)}</span>. This can take a while for large areas — you'll also get an email when it's ready.</p>
 <script>
   async function poll() {
@@ -199,11 +217,12 @@ ${imgs || "<p>No images were produced.</p>"}
       const r = await fetch(location.pathname + '/status', { headers: { accept: 'application/json' } });
       const j = await r.json();
       document.getElementById('status').textContent = j.status;
+      if (j.progress) document.getElementById('progress').textContent = j.progress;
       if (j.status === 'done' || j.status === 'failed') { location.reload(); return; }
     } catch (e) {}
-    setTimeout(poll, 5000);
+    setTimeout(poll, 3000);
   }
-  setTimeout(poll, 5000);
+  setTimeout(poll, 3000);
 </script>`,
   );
 }

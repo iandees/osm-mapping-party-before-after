@@ -15,10 +15,13 @@ import {
   createJob,
   createLoginToken,
   failStuckJobs,
+  getDoneJobsByEmail,
   getJob,
+  getRecentDoneJobs,
   markJobDone,
   markJobFailed,
   markJobRunning,
+  updateJobProgress,
 } from "./db";
 import { isValidEmail, validateJobInput } from "./validation";
 import { enqueueRenderJob } from "./aws";
@@ -33,8 +36,12 @@ app.get("/health", (c) => c.text("ok"));
 // ---- Home: login page or job form -------------------------------------
 app.get("/", async (c) => {
   const session = await verifySession(getCookie(c, SESSION_COOKIE), c.env.SECRET_KEY);
-  if (!session) return c.html(loginPage());
-  return c.html(formPage(session.email));
+  if (!session) {
+    const recent = await getRecentDoneJobs(c.env.DB, 12);
+    return c.html(loginPage(undefined, recent));
+  }
+  const mine = await getDoneJobsByEmail(c.env.DB, session.email, 12);
+  return c.html(formPage(session.email, mine));
 });
 
 // ---- Magic-link login -------------------------------------------------
@@ -77,15 +84,16 @@ app.post("/logout", (c) => {
 // ---- Job submission (auth required) -----------------------------------
 app.post("/submit", requireSession(), async (c) => {
   const email = c.get("email");
+  const mine = await getDoneJobsByEmail(c.env.DB, email, 12);
   const form = await c.req.parseBody();
   const maxArea = Number(c.env.MAX_BBOX_AREA) || 1.0;
   const result = validateJobInput(form as Record<string, unknown>, maxArea);
-  if (!result.ok) return c.html(formPage(email, result.errors.join("; ")), 400);
+  if (!result.ok) return c.html(formPage(email, mine, result.errors.join("; ")), 400);
 
   const cap = Number(c.env.MAX_ACTIVE_JOBS_PER_EMAIL) || 3;
   if ((await countActiveJobsByEmail(c.env.DB, email)) >= cap) {
     return c.html(
-      formPage(email, `You already have ${cap} jobs in progress. Please wait for them to finish.`),
+      formPage(email, mine, `You already have ${cap} jobs in progress. Please wait for them to finish.`),
       429,
     );
   }
@@ -96,7 +104,7 @@ app.post("/submit", requireSession(), async (c) => {
   } catch (e) {
     console.error("enqueue failed", e);
     await markJobFailed(c.env.DB, job.id, "Could not queue the render. Please try again.");
-    return c.html(formPage(email, "Could not queue the render. Please try again."), 502);
+    return c.html(formPage(email, mine, "Could not queue the render. Please try again."), 502);
   }
   return c.redirect(`/jobs/${job.id}`, 302);
 });
@@ -105,18 +113,18 @@ app.post("/submit", requireSession(), async (c) => {
 app.get("/jobs/:id", async (c) => {
   const job = await getJob(c.env.DB, c.req.param("id"));
   if (!job) return c.notFound();
-  let keys: string[] = [];
-  if (job.status === "done" && job.result_key) {
-    const listed = await c.env.RESULTS.list({ prefix: job.result_key });
-    keys = listed.objects.map((o) => o.key);
-  }
-  return c.html(jobPage(job, keys));
+  return c.html(jobPage(job));
 });
 
 app.get("/jobs/:id/status", async (c) => {
   const job = await getJob(c.env.DB, c.req.param("id") ?? "");
   if (!job) return c.json({ error: "not found" }, 404);
-  return c.json({ status: job.status, error: job.error, result_key: job.result_key });
+  return c.json({
+    status: job.status,
+    error: job.error,
+    progress: job.progress,
+    result_key: job.result_key,
+  });
 });
 
 // ---- Internal callbacks from the render task --------------------------
@@ -143,8 +151,14 @@ app.get("/internal/jobs/:id", async (c) => {
 app.post("/internal/jobs/:id", async (c) => {
   if (!checkCallbackAuth(c)) return c.json({ error: "unauthorized" }, 401);
   const id = c.req.param("id");
-  const body = await c.req.json<{ status: string; resultKey?: string; error?: string }>();
+  const body = await c.req.json<{ status: string; resultKey?: string; error?: string; message?: string }>();
 
+  // Any callback may carry a progress message.
+  if (body.message) await updateJobProgress(c.env.DB, id, body.message);
+
+  if (body.status === "progress") {
+    return c.json({ ok: true }); // message-only update, already applied
+  }
   if (body.status === "running") {
     await markJobRunning(c.env.DB, id);
     return c.json({ ok: true });
