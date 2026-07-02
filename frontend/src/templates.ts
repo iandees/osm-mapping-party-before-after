@@ -31,6 +31,9 @@ function layout(title: string, body: string, head = ""): string {
   .row > div { flex: 1 1 10rem; }
   .error { color: #b00020; }
   .muted { color: #666; }
+  .presets { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0.5rem 0 0; }
+  .presets a { display: inline-block; padding: 0.2rem 0.6rem; border: 1px solid #ccc; border-radius: 999px; font-size: 0.85rem; text-decoration: none; color: inherit; }
+  .presets a:hover { border-color: #e6007e; color: #e6007e; }
   #map { height: 380px; margin-top: 0.5rem; border: 1px solid #ccc; }
   img.result { max-width: 100%; border: 1px solid #ccc; margin: 0.5rem 0; display: block; }
   .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; margin: 1rem 0; }
@@ -111,6 +114,13 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
       <input id="time_after" name="time_after" type="datetime-local" required>
     </div>
   </div>
+  <p class="presets" id="presets">
+    <span class="muted">Quick range (ending now):</span>
+    <a href="#" data-preset="10y">10 years</a>
+    <a href="#" data-preset="1y">1 year</a>
+    <a href="#" data-preset="1mo">1 month</a>
+    <a href="#" data-preset="6h">6 hours</a>
+  </p>
 
   <div class="row">
     <div>
@@ -173,6 +183,29 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
   }
   map.on(L.Draw.Event.CREATED, e => setBbox(e.layer));
   document.getElementById('output_px').addEventListener('input', updateZoomHint);
+
+  // Format a Date as the local value a datetime-local input expects (YYYY-MM-DDTHH:MM).
+  function toLocalInput(d) {
+    const p = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+      'T' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  function applyPreset(preset) {
+    const after = new Date();
+    const before = new Date(after);
+    if (preset === '10y') before.setFullYear(before.getFullYear() - 10);
+    else if (preset === '1y') before.setFullYear(before.getFullYear() - 1);
+    else if (preset === '1mo') before.setMonth(before.getMonth() - 1);
+    else if (preset === '6h') before.setHours(before.getHours() - 6);
+    document.getElementById('time_before').value = toLocalInput(before);
+    document.getElementById('time_after').value = toLocalInput(after);
+  }
+  document.getElementById('presets').addEventListener('click', e => {
+    const a = e.target.closest('a[data-preset]');
+    if (!a) return;
+    e.preventDefault();
+    applyPreset(a.dataset.preset);
+  });
   document.getElementById('jobform').addEventListener('submit', e => {
     if (!document.getElementById('bbox').value) {
       e.preventDefault();
