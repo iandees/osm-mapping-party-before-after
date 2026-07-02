@@ -5,7 +5,8 @@ Flow:
   1. Read JOB_ID from env (set by the EventBridge Pipe from the SQS message).
   2. Tell the Worker we're running; fetch the job parameters.
   3. Resolve the bbox to the smallest Geofabrik region; fetch its internal history
-     file from the S3 cache, downloading from Geofabrik on a cache miss.
+     file from the S3 cache, (re)downloading from Geofabrik on a cache miss or when
+     the cache lacks data as recent as the requested after-time.
   4. Run make.sh to produce the animated GIF(s).
   5. Upload the GIF(s) to R2 and report completion (or failure) to the Worker.
 
@@ -20,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from datetime import datetime
 
 import boto3
 import requests
@@ -74,6 +76,7 @@ def geofabrik_cookie(dest: str) -> None:
             "--user", env("GEOFABRIK_USER"),
             "--password", env("GEOFABRIK_PASSWORD"),
             "--consumer-url", env("GEOFABRIK_COOKIE_URL", "https://osm-internal.download.geofabrik.de/get_cookie"),
+            "-f", "http",
             "-o", dest,
         ],
         check=True,
@@ -91,24 +94,57 @@ def download_from_geofabrik(url: str, dest: str) -> None:
                 f.write(chunk)
 
 
-def ensure_region_file(feature: dict) -> str:
-    """Return a local path to the region's history file, using an S3 cache."""
+def _parse_iso(s: str) -> datetime:
+    return datetime.fromisoformat(s.strip().replace("Z", "+00:00"))
+
+
+def newest_data_timestamp(path: str) -> datetime | None:
+    """The newest object timestamp contained in a history file, via osmium."""
+    out = subprocess.run(
+        ["osmium", "fileinfo", "-e", "-g", "data.timestamp.last", path],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    return _parse_iso(out) if out else None
+
+
+def ensure_region_file(feature: dict, time_after: str) -> str:
+    """Return a local path to the region's history file, using an S3 cache.
+
+    The cache is refreshed from Geofabrik when it does not contain data as recent
+    as ``time_after`` — otherwise the render would silently miss recent edits. If
+    even a freshly downloaded file predates ``time_after`` (Geofabrik's daily lag),
+    we proceed with the best available data.
+    """
     rid = region_id(feature)
     cache_key = f"regions/{rid}.osh.pbf"
     local = os.path.join(ROOT, f"{rid.replace('/', '_')}.osh.pbf")
+    want = _parse_iso(time_after)
 
     s3 = boto3.client("s3")
     bucket = env("REGION_CACHE_BUCKET")
+
+    cached = False
     try:
         s3.download_file(bucket, cache_key, local)
-        print(f"region cache hit: s3://{bucket}/{cache_key}")
-        return local
+        cached = True
     except Exception:
-        print(f"region cache miss for {cache_key}; downloading from Geofabrik")
+        print(f"region cache miss for {cache_key}")
+
+    if cached:
+        newest = newest_data_timestamp(local)
+        if newest is not None and newest >= want:
+            print(f"region cache hit (data through {newest.isoformat()}): {cache_key}")
+            return local
+        print(f"region cache stale (data through {newest}); refreshing from Geofabrik")
 
     url = region_history_url(feature, env("GEOFABRIK_INTERNAL_BASE", "https://osm-internal.download.geofabrik.de"))
     download_from_geofabrik(url, local)
     s3.upload_file(local, bucket, cache_key)
+
+    fresh = newest_data_timestamp(local)
+    if fresh is not None and fresh < want:
+        print(f"warning: newest available data ({fresh.isoformat()}) predates requested "
+              f"after-time ({time_after}); rendering with best available data")
     return local
 
 
@@ -161,7 +197,7 @@ def main() -> int:
         feature = select_region(fetch_region_index(), bbox)
         print(f"selected region {region_id(feature)} for bbox {bbox}")
 
-        history_file = ensure_region_file(feature)
+        history_file = ensure_region_file(feature, params["time_after"])
         run_make(history_file, params)
         prefix = upload_results(job_id)
 
