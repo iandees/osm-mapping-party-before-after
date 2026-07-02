@@ -19,8 +19,12 @@ MAX_ACTIVE_JOBS_PER_EMAIL = "3"
 [[d1_databases]]
 binding = "DB"
 database_name = "osm-before-after"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "17f691f3-2318-4280-9070-c6fc4655f734"
 migrations_dir = "migrations"
+
+[[routes]]
+pattern = "beforeafter.mapki.com"
+custom_domain = true
 
 [[r2_buckets]]
 binding = "RESULTS"
