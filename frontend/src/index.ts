@@ -14,6 +14,7 @@ import {
   countActiveJobsByEmail,
   createJob,
   createLoginToken,
+  failStuckJobs,
   getJob,
   markJobDone,
   markJobFailed,
@@ -21,7 +22,7 @@ import {
 } from "./db";
 import { isValidEmail, validateJobInput } from "./validation";
 import { enqueueRenderJob } from "./aws";
-import { sendLoginEmail, sendResultEmail } from "./email";
+import { sendFailureEmail, sendLoginEmail, sendResultEmail } from "./email";
 import { checkEmailPage, formPage, jobPage, loginPage } from "./templates";
 
 type Vars = { email: string };
@@ -112,7 +113,7 @@ app.get("/jobs/:id", async (c) => {
   return c.html(jobPage(job, keys));
 });
 
-app.get("/jobs/:id.json", async (c) => {
+app.get("/jobs/:id/status", async (c) => {
   const job = await getJob(c.env.DB, c.req.param("id") ?? "");
   if (!job) return c.json({ error: "not found" }, 404);
   return c.json({ status: job.status, error: job.error, result_key: job.result_key });
@@ -149,7 +150,17 @@ app.post("/internal/jobs/:id", async (c) => {
     return c.json({ ok: true });
   }
   if (body.status === "failed") {
-    await markJobFailed(c.env.DB, id, body.error ?? "render failed");
+    const applied = await markJobFailed(c.env.DB, id, body.error ?? "render failed");
+    if (applied) {
+      const job = await getJob(c.env.DB, id);
+      if (job) {
+        try {
+          await sendFailureEmail(c.env, job.email, `${c.env.PUBLIC_BASE_URL}/jobs/${id}`);
+        } catch (e) {
+          console.error("failure email failed", e);
+        }
+      }
+    }
     return c.json({ ok: true });
   }
   if (body.status === "done") {
@@ -183,4 +194,26 @@ app.get("/r/*", async (c) => {
   });
 });
 
-export default app;
+// Scheduled reaper: fail jobs stuck past the timeout (infra failures, load-time
+// crashes, or anything that never calls back) and notify the requester.
+async function reapStuckJobs(env: Env): Promise<void> {
+  const timeout = Number(env.STUCK_JOB_TIMEOUT_SECONDS) || 2700;
+  const failed = await failStuckJobs(env.DB, timeout);
+  for (const j of failed) {
+    try {
+      await sendFailureEmail(env, j.email, `${env.PUBLIC_BASE_URL}/jobs/${j.id}`);
+    } catch (e) {
+      console.error("reaper failure email failed", e);
+    }
+  }
+  if (failed.length) console.log(`reaped ${failed.length} stuck job(s)`);
+}
+
+// Named export for tests; default export is the Worker handler (fetch + scheduled).
+export { app };
+export default {
+  fetch: app.fetch,
+  scheduled: async (_event: ScheduledController, env: Env, ctx: ExecutionContext) => {
+    ctx.waitUntil(reapStuckJobs(env));
+  },
+};

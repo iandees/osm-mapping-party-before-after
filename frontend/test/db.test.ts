@@ -5,6 +5,7 @@ import {
   createLoginToken,
   consumeLoginToken,
   countActiveJobsByEmail,
+  failStuckJobs,
   getJob,
   markJobDone,
   markJobFailed,
@@ -76,6 +77,26 @@ describe("job lifecycle", () => {
     expect((await getJob(DB, job.id))?.status).toBe("failed");
     // Terminal: cannot re-run.
     expect(await markJobRunning(DB, job.id, 1300)).toBe(false);
+  });
+
+  it("reaps only jobs older than the timeout, and returns them", async () => {
+    const old = await createJob(DB, sampleJob, 1000);
+    const recent = await createJob(DB, sampleJob, 5000);
+    // now=6000, timeout=1000 → cutoff 5000; `old` (1000) is stuck, `recent` (5000) is not.
+    const failed = await failStuckJobs(DB, 1000, 6000);
+    expect(failed.map((f) => f.id)).toEqual([old.id]);
+    expect(failed[0].email).toBe(sampleJob.email);
+    expect((await getJob(DB, old.id))?.status).toBe("failed");
+    expect((await getJob(DB, recent.id))?.status).toBe("queued");
+  });
+
+  it("does not reap terminal jobs", async () => {
+    const job = await createJob(DB, sampleJob, 1000);
+    await markJobRunning(DB, job.id, 1000);
+    await markJobDone(DB, job.id, "k", 1000);
+    const failed = await failStuckJobs(DB, 1000, 999999);
+    expect(failed).toHaveLength(0);
+    expect((await getJob(DB, job.id))?.status).toBe("done");
   });
 
   it("counts only active (queued/running) jobs per email", async () => {

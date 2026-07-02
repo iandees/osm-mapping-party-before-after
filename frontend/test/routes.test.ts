@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, it, expect, vi, afterEach } from "vitest";
-import app from "../src/index";
+import { app } from "../src/index";
 import { createLoginToken, getJob } from "../src/db";
 
 // Build a test env: real D1/R2 bindings from the pool, plus stubbed EMAIL, AWS
@@ -132,6 +132,11 @@ describe("verify + submit", () => {
     expect(job?.status).toBe("queued");
     expect(job?.email).toBe("user@example.com");
     expect(fetchSpy).toHaveBeenCalledOnce();
+
+    // Status endpoint is reachable (not shadowed by the HTML job route).
+    const status = await app.request(`/jobs/${jobId}/status`, {}, e);
+    expect(status.status).toBe(200);
+    expect(await status.json()).toMatchObject({ status: "queued" });
   });
 
   it("rejects an invalid job submission", async () => {

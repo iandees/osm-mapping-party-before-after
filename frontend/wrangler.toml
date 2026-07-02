@@ -10,11 +10,17 @@ PUBLIC_BASE_URL = "https://beforeafter.mapki.com"
 MAIL_FROM = "ian@mapki.com"
 AWS_REGION = "us-east-1"
 # Set from the CloudFormation `QueueUrl` output after deploying infra/.
-SQS_QUEUE_URL = ""
+SQS_QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/847904970422/osm-before-after-render"
 # Max bbox area in square degrees (guards against huge, expensive renders).
 MAX_BBOX_AREA = "1.0"
 # Max concurrent non-terminal jobs (queued/running) per email address.
 MAX_ACTIVE_JOBS_PER_EMAIL = "3"
+# Jobs still queued/running after this many seconds are failed by the reaper.
+STUCK_JOB_TIMEOUT_SECONDS = "2700"
+
+# Scheduled reaper for stuck jobs.
+[triggers]
+crons = ["*/5 * * * *"]
 
 [[d1_databases]]
 binding = "DB"

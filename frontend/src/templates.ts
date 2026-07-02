@@ -196,7 +196,7 @@ ${imgs || "<p>No images were produced.</p>"}
 <script>
   async function poll() {
     try {
-      const r = await fetch(location.pathname + '.json', { headers: { accept: 'application/json' } });
+      const r = await fetch(location.pathname + '/status', { headers: { accept: 'application/json' } });
       const j = await r.json();
       document.getElementById('status').textContent = j.status;
       if (j.status === 'done' || j.status === 'failed') { location.reload(); return; }

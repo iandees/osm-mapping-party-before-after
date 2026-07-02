@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  renderFailureEmail,
   renderLoginEmail,
   renderResultEmail,
   sendLoginEmail,
@@ -21,6 +22,14 @@ describe("email rendering", () => {
     const e = renderResultEmail(url);
     expect(e.text).toContain(url);
     expect(e.html).toContain(url);
+  });
+
+  it("renders a failure email with a retry link", () => {
+    const url = "https://app.example.com/jobs/abc";
+    const e = renderFailureEmail(url);
+    expect(e.subject).toMatch(/couldn't be built/i);
+    expect(e.html).toContain(url);
+    expect(e.text).toContain(url);
   });
 
   it("escapes html-unsafe characters in links", () => {

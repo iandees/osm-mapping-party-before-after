@@ -147,6 +147,27 @@ export async function markJobDone(
   return res.meta.changes > 0;
 }
 
+/**
+ * Fail any jobs stuck in queued/running past `timeoutSeconds` (measured from
+ * creation). Catches infra failures and render crashes that never call back.
+ * Returns the affected jobs so the caller can notify them.
+ */
+export async function failStuckJobs(
+  db: D1Database,
+  timeoutSeconds: number,
+  now = nowSeconds(),
+): Promise<{ id: string; email: string }[]> {
+  const cutoff = now - timeoutSeconds;
+  const res = await db
+    .prepare(
+      "UPDATE jobs SET status = 'failed', error = 'Render timed out', finished_at = ? " +
+        "WHERE status IN ('queued','running') AND created_at < ? RETURNING id, email",
+    )
+    .bind(now, cutoff)
+    .all<{ id: string; email: string }>();
+  return res.results ?? [];
+}
+
 /** queued|running -> failed. Returns true if the transition applied. */
 export async function markJobFailed(
   db: D1Database,

@@ -32,6 +32,16 @@ export function renderResultEmail(resultUrl: string): RenderedEmail {
   };
 }
 
+export function renderFailureEmail(jobUrl: string): RenderedEmail {
+  return {
+    subject: "Your OSM before/after map couldn't be built",
+    text: `Sorry — we couldn't build your before/after map. You can try again:\n\n${jobUrl}\n`,
+    html:
+      `<p>Sorry — we couldn't build your before/after map.</p>` +
+      `<p><a href="${esc(jobUrl)}">Try again</a></p>`,
+  };
+}
+
 async function send(env: Env, to: string, email: RenderedEmail): Promise<void> {
   await env.EMAIL.send({
     to,
@@ -48,4 +58,8 @@ export async function sendLoginEmail(env: Env, to: string, link: string): Promis
 
 export async function sendResultEmail(env: Env, to: string, resultUrl: string): Promise<void> {
   await send(env, to, renderResultEmail(resultUrl));
+}
+
+export async function sendFailureEmail(env: Env, to: string, jobUrl: string): Promise<void> {
+  await send(env, to, renderFailureEmail(jobUrl));
 }

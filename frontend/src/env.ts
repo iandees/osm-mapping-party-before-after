@@ -44,4 +44,5 @@ export interface Env {
   SQS_QUEUE_URL: string;
   MAX_BBOX_AREA: string;
   MAX_ACTIVE_JOBS_PER_EMAIL: string;
+  STUCK_JOB_TIMEOUT_SECONDS: string;
 }
