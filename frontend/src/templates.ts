@@ -190,15 +190,32 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
       'T' + p(d.getHours()) + ':' + p(d.getMinutes());
   }
-  function applyPreset(preset) {
+  // Set Before/After to [now - amount·unit, now]. Exposed as window.applyRange so any
+  // range can be applied from the console, e.g. applyRange(3, 'mo') or applyRange(90, 'd').
+  function applyRange(amount, unit) {
     const after = new Date();
     const before = new Date(after);
-    if (preset === '10y') before.setFullYear(before.getFullYear() - 10);
-    else if (preset === '1y') before.setFullYear(before.getFullYear() - 1);
-    else if (preset === '1mo') before.setMonth(before.getMonth() - 1);
-    else if (preset === '6h') before.setHours(before.getHours() - 6);
+    const setters = {
+      y:  () => before.setFullYear(before.getFullYear() - amount),
+      mo: () => before.setMonth(before.getMonth() - amount),
+      w:  () => before.setDate(before.getDate() - amount * 7),
+      d:  () => before.setDate(before.getDate() - amount),
+      h:  () => before.setHours(before.getHours() - amount),
+      m:  () => before.setMinutes(before.getMinutes() - amount),
+    };
+    const apply = setters[unit];
+    if (!apply) throw new Error('Unknown unit: ' + unit + ' (use y, mo, w, d, h, m)');
+    apply();
     document.getElementById('time_before').value = toLocalInput(before);
     document.getElementById('time_after').value = toLocalInput(after);
+  }
+  window.applyRange = applyRange;
+
+  // Preset links carry a "<amount><unit>" token, e.g. "10y" or "6h".
+  function applyPreset(preset) {
+    const m = /^(\\d+)(y|mo|w|d|h|m)$/.exec(preset);
+    if (!m) throw new Error('Bad preset: ' + preset);
+    applyRange(Number(m[1]), m[2]);
   }
   document.getElementById('presets').addEventListener('click', e => {
     const a = e.target.closest('a[data-preset]');
