@@ -230,8 +230,9 @@ Resources:
             Value: !Ref RegionCacheBucket
           - Name: GEOFABRIK_INTERNAL_BASE
             Value: https://osm-internal.download.geofabrik.de
+          # Public index (no auth); region ids/paths match the internal server.
           - Name: GEOFABRIK_INDEX_URL
-            Value: https://osm-internal.download.geofabrik.de/index-v1.json
+            Value: https://download.geofabrik.de/index-v1.json
           - Name: GEOFABRIK_COOKIE_URL
             Value: https://osm-internal.download.geofabrik.de/get_cookie
           - Name: R2_ENDPOINT
