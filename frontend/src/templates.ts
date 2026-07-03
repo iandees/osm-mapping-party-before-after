@@ -26,7 +26,7 @@ function layout(title: string, body: string, head = ""): string {
   h1 { font-size: 1.4rem; }
   label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; }
   input, button { font: inherit; padding: 0.5rem; }
-  input[type=email], input[type=datetime-local], input[type=number] { width: 100%; max-width: 22rem; box-sizing: border-box; }
+  input[type=email], input[type=datetime-local], input[type=number], input[type=text] { width: 100%; max-width: 22rem; box-sizing: border-box; }
   button { cursor: pointer; margin-top: 1rem; }
   .row { display: flex; gap: 1rem; flex-wrap: wrap; }
   .row > div { flex: 1 1 10rem; }
