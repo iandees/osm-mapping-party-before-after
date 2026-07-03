@@ -95,6 +95,25 @@ describe("home", () => {
     expect(html).toContain(`/jobs/${job.id}`);
   });
 
+  it("shows the frozen compute cost on a finished job page", async () => {
+    const { env: e } = testEnv();
+    const job = await createJob(env.DB, {
+      email: "someone@example.com",
+      bbox: "-0.2,51.4,0,51.6",
+      time_before: "2020-01-01T00:00:00Z",
+      time_after: "2024-01-01T00:00:00Z",
+      zoom: 12,
+      output_px: 400,
+      num_frames: 2,
+    });
+    await markJobRunning(env.DB, job.id, 1000);
+    await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, 1000 + 3600); // ran one hour
+
+    const html = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
+    expect(html).toContain("Estimated compute cost");
+    expect(html).toContain("$0.117 USD");
+  });
+
   it("shows a signed-in user their in-progress maps and others' finished maps", async () => {
     const { env: e } = testEnv();
     const cookie = await sessionCookie(e, "me@example.com");

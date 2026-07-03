@@ -76,6 +76,38 @@ describe("job lifecycle", () => {
     expect(await markJobDone(DB, job.id, "k", 1200)).toBe(false); // still queued
   });
 
+  it("freezes a compute cost when a job is marked done", async () => {
+    const job = await createJob(DB, sampleJob, 1000);
+    await markJobRunning(DB, job.id, 1100);
+    await markJobDone(DB, job.id, "results/abc.gif", 1100 + 3600); // ran one hour
+    const done = await getJob(DB, job.id);
+    expect(done?.cost_usd).toBeCloseTo(0.11652, 5);
+  });
+
+  it("freezes a compute cost when a running job is marked failed", async () => {
+    const job = await createJob(DB, sampleJob, 1000);
+    await markJobRunning(DB, job.id, 1100);
+    await markJobFailed(DB, job.id, "boom", 1100 + 1800); // half an hour
+    const failed = await getJob(DB, job.id);
+    expect(failed?.cost_usd).toBeCloseTo(0.11652 / 2, 5);
+  });
+
+  it("costs a job failed before it ever ran at zero", async () => {
+    const job = await createJob(DB, sampleJob, 1000);
+    await markJobFailed(DB, job.id, "never started", 1200); // no markJobRunning
+    const failed = await getJob(DB, job.id);
+    expect(failed?.cost_usd).toBe(0);
+  });
+
+  it("freezes a compute cost when a stuck job is reaped", async () => {
+    const job = await createJob(DB, sampleJob, 1000);
+    await markJobRunning(DB, job.id, 1100);
+    await failStuckJobs(DB, 1, 1100 + 3600); // now well past the timeout
+    const reaped = await getJob(DB, job.id);
+    expect(reaped?.status).toBe("failed");
+    expect(reaped?.cost_usd).toBeCloseTo(0.11652, 5);
+  });
+
   it("deleteJob removes an owned job and returns its row", async () => {
     const job = await createJob(DB, sampleJob, 1000);
     await markJobRunning(DB, job.id, 1100);
