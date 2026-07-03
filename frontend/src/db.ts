@@ -1,4 +1,11 @@
 import { generateToken } from "./auth";
+import { FARGATE_HOURLY_USD } from "./cost";
+
+// SQL fragment computing the frozen Fargate compute cost for a job reaching a
+// terminal state: MAX(0, finished - started) hours × the hourly rate. Bind order
+// is (finishedNow, coalesceFallbackNow, hourlyRate). started_at may be NULL for a
+// job that failed before it ever ran → cost 0.
+const COST_SQL = "MAX(0, ? - COALESCE(started_at, ?)) / 3600.0 * ?";
 
 export type JobStatus = "queued" | "running" | "done" | "failed";
 
@@ -16,6 +23,7 @@ export interface Job {
   error: string | null;
   progress: string | null;
   result_key: string | null; // full R2 object key of the finished GIF
+  cost_usd: number | null; // frozen Fargate compute-cost estimate, set at terminal state
   created_at: number;
   started_at: number | null;
   finished_at: number | null;
@@ -212,9 +220,10 @@ export async function markJobDone(
 ): Promise<boolean> {
   const res = await db
     .prepare(
-      "UPDATE jobs SET status = 'done', result_key = ?, finished_at = ? WHERE id = ? AND status = 'running'",
+      `UPDATE jobs SET status = 'done', result_key = ?, finished_at = ?, cost_usd = ${COST_SQL} ` +
+        "WHERE id = ? AND status = 'running'",
     )
-    .bind(resultKey, now, id)
+    .bind(resultKey, now, now, now, FARGATE_HOURLY_USD, id)
     .run();
   return res.meta.changes > 0;
 }
@@ -232,10 +241,10 @@ export async function failStuckJobs(
   const cutoff = now - timeoutSeconds;
   const res = await db
     .prepare(
-      "UPDATE jobs SET status = 'failed', error = 'Render timed out', finished_at = ? " +
+      `UPDATE jobs SET status = 'failed', error = 'Render timed out', finished_at = ?, cost_usd = ${COST_SQL} ` +
         "WHERE status IN ('queued','running') AND created_at < ? RETURNING id, email",
     )
-    .bind(now, cutoff)
+    .bind(now, now, now, FARGATE_HOURLY_USD, cutoff)
     .all<{ id: string; email: string }>();
   return res.results ?? [];
 }
@@ -249,9 +258,10 @@ export async function markJobFailed(
 ): Promise<boolean> {
   const res = await db
     .prepare(
-      "UPDATE jobs SET status = 'failed', error = ?, finished_at = ? WHERE id = ? AND status IN ('queued','running')",
+      `UPDATE jobs SET status = 'failed', error = ?, finished_at = ?, cost_usd = ${COST_SQL} ` +
+        "WHERE id = ? AND status IN ('queued','running')",
     )
-    .bind(error, now, id)
+    .bind(error, now, now, now, FARGATE_HOURLY_USD, id)
     .run();
   return res.meta.changes > 0;
 }

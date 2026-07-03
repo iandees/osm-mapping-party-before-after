@@ -1,4 +1,5 @@
 import type { Job } from "./db";
+import { formatCostUsd, jobCostUsd } from "./cost";
 import {
   FRAMES_MAX,
   FRAMES_MIN,
@@ -52,8 +53,9 @@ function layout(title: string, body: string, head = ""): string {
   .gallery .placeholder.failed { background: rgba(176,0,32,0.12); color: #b00020; }
   .gallery .placeholder .spinner { width: 1.4rem; height: 1.4rem; border: 3px solid rgba(127,127,127,0.4);
     border-top-color: #e6007e; border-radius: 50%; animation: spin 0.9s linear infinite; }
-  .gallery .caption { display: block; padding: 0.35rem 0.5rem; font-size: 0.8rem; line-height: 1.3;
+  .gallery .caption { display: block; padding: 0.35rem 0.5rem 0; font-size: 0.8rem; line-height: 1.3;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gallery .cost { display: block; padding: 0 0.5rem 0.35rem; font-size: 0.72rem; color: #666; }
   .gallery .del { position: absolute; top: 4px; right: 4px; margin: 0; }
   .gallery .del button { padding: 0; width: 1.6rem; height: 1.6rem; line-height: 1; border: none; border-radius: 50%;
     background: rgba(0,0,0,0.6); color: #fff; font-size: 1.1rem; cursor: pointer; }
@@ -107,6 +109,22 @@ function cardInner(j: Job): string {
   return `<div class="placeholder"><span class="spinner"></span><span>${esc(msg)}</span></div>`;
 }
 
+/** A short cost tag under a card, or "" when there's nothing to show yet (queued). */
+function cardCost(j: Job): string {
+  const usd = jobCostUsd(j);
+  if (usd == null) return "";
+  const prefix = j.status === "running" ? "~" : "";
+  return `<span class="cost">${prefix}${esc(formatCostUsd(usd))}</span>`;
+}
+
+/** A muted cost line for a job page, or "" when there's nothing to show yet (queued). */
+function costLine(job: Job): string {
+  const usd = jobCostUsd(job);
+  if (usd == null) return "";
+  const label = job.status === "running" ? "Estimated compute cost so far" : "Estimated compute cost";
+  return `<p class="muted">${label}: ${esc(formatCostUsd(usd))} (AWS Fargate 2 vCPU / 8 GB, approximate)</p>`;
+}
+
 /**
  * A responsive grid of maps, each linking to its job page. When `owned`, cards of any
  * status are shown (finished, in-progress, failed) each with a delete control; otherwise
@@ -121,7 +139,7 @@ function galleryGrid(jobs: Job[], heading: string, owned = false): string {
         `<div class="card">` +
         `<a href="/jobs/${esc(j.id)}" title="${esc(label)} · ${esc(j.time_before)} → ${esc(j.time_after)}">` +
         cardInner(j) +
-        `<span class="caption">${esc(label)}</span></a>` +
+        `<span class="caption">${esc(label)}</span>${cardCost(j)}</a>` +
         (owned ? deleteForm(j.id, "del", "×") : "") +
         `</div>`
       );
@@ -373,6 +391,7 @@ export function jobPage(job: Job, isOwner = false): string {
       `<h1>${hasName ? esc(job.name!) : "Your before/after map"}</h1>
 <p class="muted">${esc(job.bbox)} · ${esc(job.time_before)} → ${esc(job.time_after)}</p>
 <img class="result" src="/r/${esc(job.result_key)}" alt="animated before/after map">
+${costLine(job)}
 <p><a href="/">Make another</a>${isOwner ? ` · ${deleteForm(job.id, "delete-form", "Delete this map")}` : ""}</p>`,
     );
   }
@@ -382,6 +401,7 @@ export function jobPage(job: Job, isOwner = false): string {
       "Job failed",
       `<h1>Something went wrong</h1>
 <p class="error">${esc(job.error ?? "The render failed.")}</p>
+${costLine(job)}
 <p><a href="/">Try again</a></p>`,
     );
   }
@@ -407,6 +427,7 @@ export function jobPage(job: Job, isOwner = false): string {
     `<h1>Building ${hasName ? esc(job.name!) : "your map"}…</h1>
 <ol class="checklist" id="checklist">${items}</ol>
 <p class="muted">Status: <span id="status">${esc(job.status)}</span>. This can take a while for large areas — you'll also get an email when it's ready.</p>
+${costLine(job)}
 <script>
   // Map a free-text progress message to the furthest matching step index (-1 = none yet).
   // Keywords mirror the messages emitted by render_job.py.
