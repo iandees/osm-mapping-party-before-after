@@ -31,6 +31,8 @@ function layout(title: string, body: string, head = ""): string {
   .userbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 0 0 0.5rem; }
   .userbar form { margin: 0; }
   .linkbtn { margin: 0; padding: 0; border: none; background: none; text-decoration: underline; color: inherit; cursor: pointer; }
+  footer.foot { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid #ddd; font-size: 0.85rem; }
+  footer.foot a { color: inherit; }
   .row { display: flex; gap: 1rem; flex-wrap: wrap; }
   .row > div { flex: 1 1 10rem; }
   .error { color: #b00020; }
@@ -73,6 +75,7 @@ ${head}
 </head>
 <body>
 ${body}
+<footer class="foot"><a href="/about">About</a> · <a href="https://github.com/iandees/osm-mapping-party-before-after" target="_blank" rel="noopener">Source on GitHub</a></footer>
 </body>
 </html>`;
 }
@@ -149,6 +152,29 @@ export function checkEmailPage(email: string): string {
     "Check your email",
     `<h1>Check your email</h1>
 <p>If <strong>${esc(email)}</strong> is a valid address, a sign-in link is on its way. It expires shortly and can be used once.</p>`,
+  );
+}
+
+export function aboutPage(): string {
+  return layout(
+    "About — OSM before/after",
+    `<h1>About this site</h1>
+<p><a href="/">← Back</a></p>
+<p><a href="https://www.openstreetmap.org/">OpenStreetMap</a> is a free, editable map of
+the whole world built by a community of mappers. It changes constantly — roads get added,
+buildings get traced, names get corrected.</p>
+<p>This site makes an animated GIF that shows how one area of OpenStreetMap looked at two
+points in time, so you can see what changed. Draw a box on the map, pick a <em>before</em>
+and an <em>after</em> date, and we render the map as it existed at each moment and flip
+between them.</p>
+<p>It's handy for showing off the work done at a
+<a href="https://wiki.openstreetmap.org/wiki/Mapping_party">mapping party</a>, watching a
+town fill in over the years, or just seeing how the map has grown.</p>
+<p>The rendering uses the standard OpenStreetMap map style. Historical data comes from
+<a href="https://download.geofabrik.de/">Geofabrik</a>'s full-history extracts. Map data
+© OpenStreetMap contributors.</p>
+<p>The source code is on
+<a href="https://github.com/iandees/osm-mapping-party-before-after" target="_blank" rel="noopener">GitHub</a>.</p>`,
   );
 }
 
