@@ -28,6 +28,9 @@ function layout(title: string, body: string, head = ""): string {
   input, button { font: inherit; padding: 0.5rem; }
   input[type=email], input[type=datetime-local], input[type=number], input[type=text] { width: 100%; max-width: 22rem; box-sizing: border-box; }
   button { cursor: pointer; margin-top: 1rem; }
+  .userbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 0 0 0.5rem; }
+  .userbar form { margin: 0; }
+  .linkbtn { margin: 0; padding: 0; border: none; background: none; text-decoration: underline; color: inherit; cursor: pointer; }
   .row { display: flex; gap: 1rem; flex-wrap: wrap; }
   .row > div { flex: 1 1 10rem; }
   .error { color: #b00020; }
@@ -163,7 +166,7 @@ export function formPage(
   return layout(
     "Create a before/after map",
     `<h1>Create a before/after map</h1>
-<p class="muted">Signed in as ${esc(email)} · <form method="post" action="/logout" style="display:inline"><button style="margin:0;padding:0;border:none;background:none;text-decoration:underline;color:inherit;cursor:pointer">sign out</button></form></p>
+<div class="userbar"><span class="muted">Signed in as ${esc(email)}</span><form method="post" action="/logout"><button class="linkbtn">Sign out</button></form></div>
 ${error ? `<p class="error">${esc(error)}</p>` : ""}
 <form method="post" action="/submit" id="jobform">
   <label>Area — draw a rectangle on the map</label>
