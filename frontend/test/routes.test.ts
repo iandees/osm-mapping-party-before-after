@@ -83,6 +83,31 @@ describe("home", () => {
     expect(html).toContain(`/r/jobs/${job.id}/map.gif`);
     expect(html).toContain(`/jobs/${job.id}`);
   });
+
+  it("shows a signed-in user their in-progress maps and others' finished maps", async () => {
+    const { env: e } = testEnv();
+    const cookie = await sessionCookie(e, "me@example.com");
+
+    // My own in-progress job (running, no result yet).
+    const mine = await createJob(env.DB, {
+      email: "me@example.com",
+      bbox: "-0.2,51.4,0,51.6",
+      time_before: "2020-01-01T00:00:00Z",
+      time_after: "2024-01-01T00:00:00Z",
+      zoom: 12,
+      output_px: 400,
+      num_frames: 2,
+    });
+    await markJobRunning(env.DB, mine.id);
+    // Someone else's finished job.
+    const theirs = await doneJob("other@example.com");
+
+    const html = await (await app.request("/", { headers: { cookie } }, e)).text();
+    expect(html).toContain("Your maps");
+    expect(html).toContain(`/jobs/${mine.id}`); // in-progress card is listed
+    expect(html).toContain("Maps from others");
+    expect(html).toContain(`/r/jobs/${theirs.id}/map.gif`); // others' finished map
+  });
 });
 
 describe("auth gating", () => {
@@ -155,6 +180,7 @@ describe("verify + submit", () => {
         },
         body: new URLSearchParams({
           bbox: "-0.2,51.4,0.0,51.6",
+          name: "Downtown Rochester",
           time_before: "2020-01-01T00:00",
           time_after: "2024-01-01T00:00",
           output_px: "800",
@@ -169,10 +195,11 @@ describe("verify + submit", () => {
     expect(loc).toMatch(/^\/jobs\//);
     const jobId = loc.split("/").pop()!;
 
-    // Job persisted and SQS called.
+    // Job persisted (with its name) and SQS called.
     const job = await getJob(env.DB, jobId);
     expect(job?.status).toBe("queued");
     expect(job?.email).toBe("user@example.com");
+    expect(job?.name).toBe("Downtown Rochester");
     expect(fetchSpy).toHaveBeenCalledOnce();
 
     // Status endpoint is reachable (not shadowed by the HTML job route).
@@ -202,6 +229,25 @@ describe("verify + submit", () => {
       e,
     );
     expect(res.status).toBe(400);
+  });
+
+  it("shows an ordered progress checklist on a running job page", async () => {
+    const { env: e } = testEnv();
+    const job = await createJob(env.DB, {
+      email: "user@example.com",
+      bbox: "-0.2,51.4,0,51.6",
+      time_before: "2020-01-01T00:00:00Z",
+      time_after: "2024-01-01T00:00:00Z",
+      zoom: 12,
+      output_px: 400,
+      num_frames: 2,
+    });
+    await markJobRunning(env.DB, job.id);
+
+    const html = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
+    expect(html).toContain('class="checklist"');
+    expect(html).toContain("Extracting frames");
+    expect(html).toContain("Uploading your map");
   });
 });
 

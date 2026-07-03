@@ -16,6 +16,9 @@ export const SIZE_MIN = 256;
 export const SIZE_MAX = 2000;
 export const SIZE_DEFAULT = 800;
 
+// Optional human label for the map area. Trimmed and truncated, never required.
+export const NAME_MAX = 120;
+
 export function isValidEmail(email: unknown): email is string {
   return typeof email === "string" && email.length <= 254 && EMAIL_RE.test(email);
 }
@@ -60,11 +63,20 @@ export function suggestedZoom(
 
 export interface JobInput {
   bbox: string; // normalized "left,bottom,right,top"
+  name: string | null; // optional label; null when empty/absent
   time_before: string; // ISO-8601 (Z)
   time_after: string;
   zoom: number; // derived from bbox + output_px
   output_px: number; // longest side of the delivered GIF
   num_frames: number;
+}
+
+/** Trim and cap an optional name; empty/whitespace/non-string → null. Never errors. */
+export function parseName(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  return trimmed.slice(0, NAME_MAX);
 }
 
 export type ValidationResult<T> =
@@ -150,6 +162,7 @@ export function validateJobInput(
     ok: true,
     value: {
       bbox: [l, b, r, t].join(","),
+      name: parseName(form.name),
       time_before: before!,
       time_after: after!,
       zoom: suggestedZoom(l, b, r, t, size!),

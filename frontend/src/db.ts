@@ -5,6 +5,7 @@ export type JobStatus = "queued" | "running" | "done" | "failed";
 export interface Job {
   id: string;
   email: string;
+  name: string | null; // optional human label for the area (may be reverse-geocoded)
   bbox: string;
   time_before: string;
   time_after: string;
@@ -22,6 +23,7 @@ export interface Job {
 
 export interface NewJob {
   email: string;
+  name?: string | null;
   bbox: string;
   time_before: string;
   time_after: string;
@@ -79,12 +81,13 @@ export async function createJob(
   await db
     .prepare(
       `INSERT INTO jobs
-        (id, email, bbox, time_before, time_after, zoom, output_px, num_frames, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
+        (id, email, name, bbox, time_before, time_after, zoom, output_px, num_frames, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
     )
     .bind(
       id,
       job.email,
+      job.name ?? null,
       job.bbox,
       job.time_before,
       job.time_after,
@@ -137,16 +140,32 @@ export async function getRecentDoneJobs(db: D1Database, limit: number): Promise<
   return res.results ?? [];
 }
 
-/** Recent finished jobs for one email, for the signed-in user's own maps. */
-export async function getDoneJobsByEmail(
+/** Recent finished jobs NOT owned by `email`, for the signed-in "others" gallery. */
+export async function getRecentDoneJobsExcludingEmail(
   db: D1Database,
   email: string,
   limit: number,
 ): Promise<Job[]> {
   const res = await db
     .prepare(
-      "SELECT * FROM jobs WHERE email = ? AND status = 'done' AND result_key IS NOT NULL ORDER BY finished_at DESC LIMIT ?",
+      "SELECT * FROM jobs WHERE status = 'done' AND result_key IS NOT NULL AND email != ? ORDER BY finished_at DESC LIMIT ?",
     )
+    .bind(email, limit)
+    .all<Job>();
+  return res.results ?? [];
+}
+
+/**
+ * All of one user's jobs regardless of status, newest first — for the signed-in
+ * user's "Your maps" gallery, which shows in-progress and failed jobs too.
+ */
+export async function getJobsByEmail(
+  db: D1Database,
+  email: string,
+  limit: number,
+): Promise<Job[]> {
+  const res = await db
+    .prepare("SELECT * FROM jobs WHERE email = ? ORDER BY created_at DESC LIMIT ?")
     .bind(email, limit)
     .all<Job>();
   return res.results ?? [];

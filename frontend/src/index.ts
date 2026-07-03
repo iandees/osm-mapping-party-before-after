@@ -16,9 +16,10 @@ import {
   createLoginToken,
   deleteJob,
   failStuckJobs,
-  getDoneJobsByEmail,
   getJob,
+  getJobsByEmail,
   getRecentDoneJobs,
+  getRecentDoneJobsExcludingEmail,
   markJobDone,
   markJobFailed,
   markJobRunning,
@@ -41,8 +42,11 @@ app.get("/", async (c) => {
     const recent = await getRecentDoneJobs(c.env.DB, 12);
     return c.html(loginPage(undefined, recent));
   }
-  const mine = await getDoneJobsByEmail(c.env.DB, session.email, 12);
-  return c.html(formPage(session.email, mine));
+  const [mine, others] = await Promise.all([
+    getJobsByEmail(c.env.DB, session.email, 12),
+    getRecentDoneJobsExcludingEmail(c.env.DB, session.email, 12),
+  ]);
+  return c.html(formPage(session.email, mine, others));
 });
 
 // ---- Magic-link login -------------------------------------------------
@@ -85,16 +89,19 @@ app.post("/logout", (c) => {
 // ---- Job submission (auth required) -----------------------------------
 app.post("/submit", requireSession(), async (c) => {
   const email = c.get("email");
-  const mine = await getDoneJobsByEmail(c.env.DB, email, 12);
+  const [mine, others] = await Promise.all([
+    getJobsByEmail(c.env.DB, email, 12),
+    getRecentDoneJobsExcludingEmail(c.env.DB, email, 12),
+  ]);
   const form = await c.req.parseBody();
   const maxArea = Number(c.env.MAX_BBOX_AREA) || 1.0;
   const result = validateJobInput(form as Record<string, unknown>, maxArea);
-  if (!result.ok) return c.html(formPage(email, mine, result.errors.join("; ")), 400);
+  if (!result.ok) return c.html(formPage(email, mine, others, result.errors.join("; ")), 400);
 
   const cap = Number(c.env.MAX_ACTIVE_JOBS_PER_EMAIL) || 3;
   if ((await countActiveJobsByEmail(c.env.DB, email)) >= cap) {
     return c.html(
-      formPage(email, mine, `You already have ${cap} jobs in progress. Please wait for them to finish.`),
+      formPage(email, mine, others, `You already have ${cap} jobs in progress. Please wait for them to finish.`),
       429,
     );
   }
@@ -105,7 +112,7 @@ app.post("/submit", requireSession(), async (c) => {
   } catch (e) {
     console.error("enqueue failed", e);
     await markJobFailed(c.env.DB, job.id, "Could not queue the render. Please try again.");
-    return c.html(formPage(email, mine, "Could not queue the render. Please try again."), 502);
+    return c.html(formPage(email, mine, others, "Could not queue the render. Please try again."), 502);
   }
   return c.redirect(`/jobs/${job.id}`, 302);
 });
