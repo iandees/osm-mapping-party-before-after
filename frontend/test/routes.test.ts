@@ -57,6 +57,17 @@ beforeEach(async () => {
 
 afterEach(() => vi.restoreAllMocks());
 
+describe("about", () => {
+  it("serves the about page with a link to the source repo", async () => {
+    const { env: e } = testEnv();
+    const res = await app.request("/about", {}, e);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toMatch(/About this site/i);
+    expect(html).toContain("github.com/iandees/osm-mapping-party-before-after");
+  });
+});
+
 describe("home", () => {
   it("shows the login page when unauthenticated", async () => {
     const { env: e } = testEnv();

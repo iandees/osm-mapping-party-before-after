@@ -26,8 +26,13 @@ function layout(title: string, body: string, head = ""): string {
   h1 { font-size: 1.4rem; }
   label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; }
   input, button { font: inherit; padding: 0.5rem; }
-  input[type=email], input[type=datetime-local], input[type=number] { width: 100%; max-width: 22rem; box-sizing: border-box; }
+  input[type=email], input[type=datetime-local], input[type=number], input[type=text] { width: 100%; max-width: 22rem; box-sizing: border-box; }
   button { cursor: pointer; margin-top: 1rem; }
+  .userbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 0 0 0.5rem; }
+  .userbar form { margin: 0; }
+  .linkbtn { margin: 0; padding: 0; border: none; background: none; text-decoration: underline; color: inherit; cursor: pointer; }
+  footer.foot { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid #ddd; font-size: 0.85rem; }
+  footer.foot a { color: inherit; }
   .row { display: flex; gap: 1rem; flex-wrap: wrap; }
   .row > div { flex: 1 1 10rem; }
   .error { color: #b00020; }
@@ -70,6 +75,7 @@ ${head}
 </head>
 <body>
 ${body}
+<footer class="foot"><a href="/about">About</a> · <a href="https://github.com/iandees/osm-mapping-party-before-after" target="_blank" rel="noopener">Source on GitHub</a></footer>
 </body>
 </html>`;
 }
@@ -149,6 +155,29 @@ export function checkEmailPage(email: string): string {
   );
 }
 
+export function aboutPage(): string {
+  return layout(
+    "About — OSM before/after",
+    `<h1>About this site</h1>
+<p><a href="/">← Back</a></p>
+<p><a href="https://www.openstreetmap.org/">OpenStreetMap</a> is a free, editable map of
+the whole world built by a community of mappers. It changes constantly — roads get added,
+buildings get traced, names get corrected.</p>
+<p>This site makes an animated GIF that shows how one area of OpenStreetMap looked at two
+points in time, so you can see what changed. Draw a box on the map, pick a <em>before</em>
+and an <em>after</em> date, and we render the map as it existed at each moment and flip
+between them.</p>
+<p>It's handy for showing off the work done at a
+<a href="https://wiki.openstreetmap.org/wiki/Mapping_party">mapping party</a>, watching a
+town fill in over the years, or just seeing how the map has grown.</p>
+<p>The rendering uses the standard OpenStreetMap map style. Historical data comes from
+<a href="https://download.geofabrik.de/">Geofabrik</a>'s full-history extracts. Map data
+© OpenStreetMap contributors.</p>
+<p>The source code is on
+<a href="https://github.com/iandees/osm-mapping-party-before-after" target="_blank" rel="noopener">GitHub</a>.</p>`,
+  );
+}
+
 export function formPage(
   email: string,
   jobs: Job[] = [],
@@ -163,7 +192,7 @@ export function formPage(
   return layout(
     "Create a before/after map",
     `<h1>Create a before/after map</h1>
-<p class="muted">Signed in as ${esc(email)} · <form method="post" action="/logout" style="display:inline"><button style="margin:0;padding:0;border:none;background:none;text-decoration:underline;color:inherit;cursor:pointer">sign out</button></form></p>
+<div class="userbar"><span class="muted">Signed in as ${esc(email)}</span><form method="post" action="/logout"><button class="linkbtn">Sign out</button></form></div>
 ${error ? `<p class="error">${esc(error)}</p>` : ""}
 <form method="post" action="/submit" id="jobform">
   <label>Area — draw a rectangle on the map</label>

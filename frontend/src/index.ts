@@ -28,12 +28,14 @@ import {
 import { isValidEmail, validateJobInput } from "./validation";
 import { enqueueRenderJob } from "./aws";
 import { sendFailureEmail, sendLoginEmail, sendResultEmail } from "./email";
-import { checkEmailPage, formPage, jobPage, loginPage } from "./templates";
+import { aboutPage, checkEmailPage, formPage, jobPage, loginPage } from "./templates";
 
 type Vars = { email: string };
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 app.get("/health", (c) => c.text("ok"));
+
+app.get("/about", (c) => c.html(aboutPage()));
 
 // ---- Home: login page or job form -------------------------------------
 app.get("/", async (c) => {
