@@ -105,23 +105,38 @@ END
 # Generate timestamps
 TIMESTAMPS=$(generate_timestamps "$TIME_BEFORE" "$TIME_AFTER" "$NUM_FRAMES")
 
-# Process each timestamp
-for TIME in $TIMESTAMPS; do
-  FILENAME="$(realpath "${PREFIX}.$TIME.$BBOX_COMMA.osm.pbf")"
-  if [ "$PBF_FILE" -nt "$FILENAME" ] ; then
-    NEWFILE=$(mktemp -p . tmp.time.XXXXXX.osm.pbf)
-    echo "Extracting data for $TIME..."
-    osmium time-filter --overwrite -o "$NEWFILE" "$PBF_FILE" "$TIME"
-    mv "$NEWFILE" "$FILENAME"
-  fi
+# Shared osm2pgsql args — MUST be identical for --create and --append or append
+# breaks. openstreetmap-carto v6 uses the flex output backend (single lua style).
+OSM2PGSQL_ARGS=(--output flex --style openstreetmap-carto-flex.lua -d gis)
 
-  if [ "$FILENAME" -nt "$ROOT/.$PREFIX.$TIME.$BBOX_COMMA.generated" ] ; then
-    cd "$ROOT/openstreetmap-carto"
-    echo "Importing data for $TIME..."
-    osm2pgsql --output flex --style openstreetmap-carto-flex.lua -d gis "$FILENAME"
+# Process each timestamp. Frame 0 is a full slim create; later frames apply only
+# the OsmChange delta from the previous frame's snapshot (osmium derive-changes),
+# so per-frame DB cost scales with the delta, not the whole region. Because append
+# is not idempotent, the DB is built in a single pass (no cross-run resume); the
+# .generated sentinel is now only the render gate.
+FRAME_IDX=0
+PREV_SNAP=""
+for TIME in $TIMESTAMPS; do
+  SNAP="$(realpath "${PREFIX}.$TIME.$BBOX_COMMA.osm.pbf")"
+  echo "Extracting data for $TIME..."
+  NEWFILE=$(mktemp -p . tmp.time.XXXXXX.osm.pbf)
+  osmium time-filter --overwrite -o "$NEWFILE" "$PBF_FILE" "$TIME"
+  mv "$NEWFILE" "$SNAP"
+
+  cd "$ROOT/openstreetmap-carto"
+  echo "Importing data for $TIME..."
+  if [ "$FRAME_IDX" -eq 0 ] ; then
+    osm2pgsql --create --slim "${OSM2PGSQL_ARGS[@]}" "$SNAP"
     psql -d gis -f indexes.sql
-    touch "$ROOT/.$PREFIX.$TIME.$BBOX_COMMA.generated"
+  else
+    DELTA=$(mktemp -p "$ROOT" tmp.delta.XXXXXX.osc)
+    osmium derive-changes --overwrite "$PREV_SNAP" "$SNAP" -o "$DELTA"
+    osm2pgsql --append --slim "${OSM2PGSQL_ARGS[@]}" "$DELTA"
+    rm -f "$DELTA" "$PREV_SNAP"
   fi
+  touch "$ROOT/.$PREFIX.$TIME.$BBOX_COMMA.generated"
+  PREV_SNAP="$SNAP"
+  FRAME_IDX=$((FRAME_IDX + 1))
 
   cd "$ROOT"
   for ZOOM in $(seq "$MIN_ZOOM" "$MAX_ZOOM") ; do

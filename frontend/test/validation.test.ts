@@ -83,6 +83,11 @@ describe("validateJobInput", () => {
     expect(validateJobInput({ ...valid, num_frames: "1" }, MAX_AREA).ok).toBe(false);
     expect(validateJobInput({ ...valid, num_frames: "999" }, MAX_AREA).ok).toBe(false);
   });
+
+  it("accepts the maximum frame count and rejects one over", () => {
+    expect(validateJobInput({ ...valid, num_frames: "120" }, MAX_AREA).ok).toBe(true);
+    expect(validateJobInput({ ...valid, num_frames: "121" }, MAX_AREA).ok).toBe(false);
+  });
 });
 
 describe("suggestedZoom", () => {
