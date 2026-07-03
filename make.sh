@@ -144,18 +144,24 @@ for TIME in $TIMESTAMPS; do
       echo "Generating zoom ${ZOOM} at time ${TIME}"
       GENERATED="$PREFIX.$TIME.$BBOX_COMMA.z${ZOOM}.png"
       nik4.py openstreetmap-carto/project.xml "$GENERATED" -b $BBOX_SPACE -z "$ZOOM" || break
-      # Add padding to the bottom of the image to make space for the attribution.
-      # The attribution/timestamp overlay is legally required (ODbL), so these
-      # steps must NOT be `|| break`-swallowed: a font/render failure here has to
-      # fail the whole job (via `set -o errexit`) rather than silently ship a
-      # frame with no attribution baked in.
+      # Add a white band at the bottom of the image for the attribution/timestamp.
+      # GraphicsMagick has no -splice and its bare `-extent -0-30` is a no-op here
+      # (it silently leaves the canvas unchanged), so compute the target size and
+      # extend the canvas explicitly with north gravity to keep the map flush top.
+      # The overlay is legally required (ODbL), so these steps are NOT
+      # `|| break`-swallowed: a font/render failure fails the whole job (via
+      # `set -o errexit`) rather than silently shipping a frame with no attribution.
+      IMG_W=$(gm identify -format '%w' "$GENERATED")
+      IMG_H=$(gm identify -format '%h' "$GENERATED")
       NEW_PADDED="$(mktemp tmp.XXXXXX.padded.png)"
-      gm convert "$GENERATED" -background white -gravity south -extent -0-30 "$NEW_PADDED"
-      # Add the attribution and timestamp
+      gm convert "$GENERATED" -background white -gravity north -extent "${IMG_W}x$((IMG_H + 34))" "$NEW_PADDED"
+      # Draw the timestamp (bottom-left) and attribution (bottom-right) into the
+      # band. Noto Sans (fonts-noto-hinted, already in the image) is more compact
+      # and legible than Courier and leaves margin so the two ends don't collide.
       NEW_ATTRIBUTION="$(mktemp tmp.XXXXXX.attribution.png)"
-      gm convert "$NEW_PADDED" -font Courier -pointsize 20 -fill black \
-                               -gravity southwest -draw "text 5,5 '${TIME}'" \
-                               -gravity southeast -draw "text 5,5 'Data © OpenStreetMap contributors, ODbL'" \
+      gm convert "$NEW_PADDED" -font /usr/share/fonts/truetype/noto/NotoSans-Regular.ttf -pointsize 20 -fill black \
+                               -gravity southwest -draw "text 6,7 '${TIME}'" \
+                               -gravity southeast -draw "text 6,7 'Data © OpenStreetMap contributors, ODbL'" \
                                "$NEW_ATTRIBUTION"
       mv "$NEW_ATTRIBUTION" "$GENERATED"
       rm "$NEW_PADDED"
