@@ -2,6 +2,7 @@ import type { Job } from "./db";
 import {
   FRAMES_MAX,
   FRAMES_MIN,
+  NAME_MAX,
   SIZE_DEFAULT,
   SIZE_MAX,
   SIZE_MIN,
@@ -38,14 +39,32 @@ function layout(title: string, body: string, head = ""): string {
   img.result { max-width: 100%; border: 1px solid #ccc; margin: 0.5rem 0; display: block; }
   .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; margin: 1rem 0; }
   .gallery .card { position: relative; }
-  .gallery a { display: block; border: 1px solid #ccc; border-radius: 6px; overflow: hidden; }
+  .gallery a { display: block; border: 1px solid #ccc; border-radius: 6px; overflow: hidden; text-decoration: none; color: inherit; }
   .gallery img { width: 100%; height: 140px; object-fit: cover; display: block; }
+  .gallery .placeholder { height: 140px; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 0.4rem; padding: 0.5rem; text-align: center; font-size: 0.85rem;
+    background: rgba(127,127,127,0.12); box-sizing: border-box; }
+  .gallery .placeholder.failed { background: rgba(176,0,32,0.12); color: #b00020; }
+  .gallery .placeholder .spinner { width: 1.4rem; height: 1.4rem; border: 3px solid rgba(127,127,127,0.4);
+    border-top-color: #e6007e; border-radius: 50%; animation: spin 0.9s linear infinite; }
+  .gallery .caption { display: block; padding: 0.35rem 0.5rem; font-size: 0.8rem; line-height: 1.3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .gallery .del { position: absolute; top: 4px; right: 4px; margin: 0; }
   .gallery .del button { padding: 0; width: 1.6rem; height: 1.6rem; line-height: 1; border: none; border-radius: 50%;
     background: rgba(0,0,0,0.6); color: #fff; font-size: 1.1rem; cursor: pointer; }
   .gallery .del button:hover { background: #b00020; }
   .delete-form { display: inline; margin: 0; }
   section.maps { margin-top: 2rem; border-top: 1px solid #ddd; padding-top: 1rem; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  ol.checklist { list-style: none; padding: 0; margin: 1rem 0; max-width: 26rem; }
+  ol.checklist li { display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0; color: #999; }
+  ol.checklist li .mark { flex: 0 0 1.4rem; height: 1.4rem; display: flex; align-items: center; justify-content: center; }
+  ol.checklist li.done { color: inherit; }
+  ol.checklist li.done .mark { color: #2e7d32; font-weight: 700; }
+  ol.checklist li.active { color: inherit; font-weight: 600; }
+  ol.checklist li.active .mark .spinner { width: 1.1rem; height: 1.1rem; border: 3px solid rgba(127,127,127,0.4);
+    border-top-color: #e6007e; border-radius: 50%; animation: spin 0.9s linear infinite; }
+  ol.checklist li .detail { color: #666; font-weight: 400; font-size: 0.9rem; }
 </style>
 ${head}
 </head>
@@ -64,21 +83,43 @@ function deleteForm(id: string, cssClass: string, label: string): string {
   );
 }
 
+/** The label shown under a card and in its link title: the name, else the bbox. */
+function cardLabel(j: Job): string {
+  return j.name && j.name.trim() !== "" ? j.name : j.bbox;
+}
+
+/** The inner media of a card, chosen by job status. */
+function cardInner(j: Job): string {
+  if (j.status === "done" && j.result_key) {
+    return `<img loading="lazy" src="/r/${esc(j.result_key)}" alt="before/after map">`;
+  }
+  if (j.status === "failed") {
+    return `<div class="placeholder failed"><span>Failed</span></div>`;
+  }
+  // queued | running
+  const msg = j.progress ?? (j.status === "running" ? "Working…" : "Queued…");
+  return `<div class="placeholder"><span class="spinner"></span><span>${esc(msg)}</span></div>`;
+}
+
 /**
- * A responsive grid of finished maps, each linking to its job page. When `owned`,
- * each card also shows a delete control (used only for the signed-in user's own maps).
+ * A responsive grid of maps, each linking to its job page. When `owned`, cards of any
+ * status are shown (finished, in-progress, failed) each with a delete control; otherwise
+ * only finished maps with a result are shown (the public / "others" galleries).
  */
 function galleryGrid(jobs: Job[], heading: string, owned = false): string {
-  const cards = jobs
-    .filter((j) => j.result_key)
-    .map(
-      (j) =>
+  const shown = owned ? jobs : jobs.filter((j) => j.status === "done" && j.result_key);
+  const cards = shown
+    .map((j) => {
+      const label = cardLabel(j);
+      return (
         `<div class="card">` +
-        `<a href="/jobs/${esc(j.id)}" title="${esc(j.bbox)} · ${esc(j.time_before)} → ${esc(j.time_after)}">` +
-        `<img loading="lazy" src="/r/${esc(j.result_key!)}" alt="before/after map"></a>` +
+        `<a href="/jobs/${esc(j.id)}" title="${esc(label)} · ${esc(j.time_before)} → ${esc(j.time_after)}">` +
+        cardInner(j) +
+        `<span class="caption">${esc(label)}</span></a>` +
         (owned ? deleteForm(j.id, "del", "×") : "") +
-        `</div>`,
-    )
+        `</div>`
+      );
+    })
     .join("\n");
   if (!cards) return "";
   return `<section class="maps"><h2 style="font-size:1.1rem">${esc(heading)}</h2>
@@ -108,7 +149,12 @@ export function checkEmailPage(email: string): string {
   );
 }
 
-export function formPage(email: string, jobs: Job[] = [], error?: string): string {
+export function formPage(
+  email: string,
+  jobs: Job[] = [],
+  others: Job[] = [],
+  error?: string,
+): string {
   const head = `
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css">
@@ -142,6 +188,11 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
     <a href="#" data-preset="1mo">1 month</a>
     <a href="#" data-preset="6h">6 hours</a>
   </p>
+
+  <label for="name">Name (optional)</label>
+  <input id="name" name="name" type="text" maxlength="${NAME_MAX}"
+         placeholder="e.g. Downtown Rochester" autocomplete="off">
+  <p class="muted" id="namehint">We'll suggest a name for the area you draw; edit it however you like.</p>
 
   <div class="row">
     <div>
@@ -201,9 +252,37 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
     document.getElementById('bbox').value = bbox;
     document.getElementById('bboxlabel').textContent = 'Selected bbox: ' + bbox;
     updateZoomHint();
+    suggestName(current);
   }
   map.on(L.Draw.Event.CREATED, e => setBbox(e.layer));
   document.getElementById('output_px').addEventListener('input', updateZoomHint);
+
+  // Reverse-geocode the bbox centroid to suggest a name — but never clobber a name
+  // the user has typed themselves. Best-effort, debounced, single in-flight request.
+  const nameInput = document.getElementById('name');
+  let nameDirty = nameInput.value.trim() !== '';
+  nameInput.addEventListener('input', () => { nameDirty = true; });
+  let geocodeTimer = null, geocodeAbort = null;
+  function suggestName(bbox) {
+    if (nameDirty) return;
+    const [left, bottom, right, top] = bbox;
+    const lat = (bottom + top) / 2, lon = (left + right) / 2;
+    if (geocodeTimer) clearTimeout(geocodeTimer);
+    geocodeTimer = setTimeout(async () => {
+      if (geocodeAbort) geocodeAbort.abort();
+      geocodeAbort = new AbortController();
+      const url = 'https://nominatim.openstreetmap.org/reverse?lat=' + lat +
+        '&lon=' + lon + '&zoom=10&format=jsonv2';
+      try {
+        const r = await fetch(url, { signal: geocodeAbort.signal, headers: { accept: 'application/json' } });
+        if (!r.ok) return;
+        const j = await r.json();
+        if (nameDirty) return; // user typed while we were fetching
+        const name = j && (j.name || j.display_name);
+        if (name) nameInput.value = String(name).slice(0, ${NAME_MAX});
+      } catch (e) { /* best-effort: leave the field as-is */ }
+    }, 500);
+  }
 
   // Format a Date as the local value a datetime-local input expects (YYYY-MM-DDTHH:MM).
   function toLocalInput(d) {
@@ -251,16 +330,18 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
     }
   });
 </script>
-${galleryGrid(jobs, "Your maps", true)}`,
+${galleryGrid(jobs, "Your maps", true)}
+${galleryGrid(others, "Maps from others")}`,
     head,
   );
 }
 
 export function jobPage(job: Job, isOwner = false): string {
+  const hasName = !!(job.name && job.name.trim() !== "");
   if (job.status === "done" && job.result_key) {
     return layout(
-      "Your map is ready",
-      `<h1>Your before/after map</h1>
+      hasName ? job.name! : "Your map is ready",
+      `<h1>${hasName ? esc(job.name!) : "Your before/after map"}</h1>
 <p class="muted">${esc(job.bbox)} · ${esc(job.time_before)} → ${esc(job.time_after)}</p>
 <img class="result" src="/r/${esc(job.result_key)}" alt="animated before/after map">
 <p><a href="/">Make another</a>${isOwner ? ` · ${deleteForm(job.id, "delete-form", "Delete this map")}` : ""}</p>`,
@@ -276,19 +357,72 @@ export function jobPage(job: Job, isOwner = false): string {
     );
   }
 
-  // queued | running: poll for updates.
+  // queued | running: poll for updates and drive an ordered checklist.
+  const steps = [
+    "Finding the map region",
+    "Preparing map data",
+    "Extracting frames",
+    "Importing frames",
+    "Rendering images",
+    "Assembling the animation",
+    "Uploading your map",
+  ];
+  const items = steps
+    .map(
+      (label, i) =>
+        `<li data-step="${i}"><span class="mark"></span><span class="label">${esc(label)}</span> <span class="detail"></span></li>`,
+    )
+    .join("\n");
   return layout(
-    "Working on your map",
-    `<h1>Building your map…</h1>
-<p><strong id="progress">${esc(job.progress ?? "Waiting to start…")}</strong></p>
+    hasName ? `${job.name!} — building…` : "Working on your map",
+    `<h1>Building ${hasName ? esc(job.name!) : "your map"}…</h1>
+<ol class="checklist" id="checklist">${items}</ol>
 <p class="muted">Status: <span id="status">${esc(job.status)}</span>. This can take a while for large areas — you'll also get an email when it's ready.</p>
 <script>
+  // Map a free-text progress message to the furthest matching step index (-1 = none yet).
+  // Keywords mirror the messages emitted by render_job.py.
+  const STEP_KEYWORDS = [
+    ["Finding the right map region"],
+    ["Preparing map data", "Downloading map history"],
+    ["Extracting frame"],
+    ["Importing frame"],
+    ["Rendering images"],
+    ["Assembling the animation"],
+    ["Uploading your map"],
+  ];
+  function stepIndexFor(message) {
+    if (!message) return -1;
+    let idx = -1;
+    for (let i = 0; i < STEP_KEYWORDS.length; i++) {
+      if (STEP_KEYWORDS[i].some(k => message.indexOf(k) !== -1)) idx = i;
+    }
+    return idx;
+  }
+  let lastIdx = -1;
+  function renderChecklist(idx, message) {
+    if (idx < lastIdx) idx = lastIdx;      // never regress
+    else lastIdx = idx;
+    const lis = document.querySelectorAll('#checklist li');
+    lis.forEach((li, i) => {
+      li.classList.remove('done', 'active', 'pending');
+      const mark = li.querySelector('.mark');
+      const detail = li.querySelector('.detail');
+      detail.textContent = '';
+      if (i < idx) { li.classList.add('done'); mark.textContent = '\\u2713'; }
+      else if (i === idx) {
+        li.classList.add('active');
+        mark.innerHTML = '<span class="spinner"></span>';
+        if (message) detail.textContent = message;
+      } else { li.classList.add('pending'); mark.textContent = ''; }
+    });
+  }
+  renderChecklist(stepIndexFor(${JSON.stringify(job.progress ?? "")}), ${JSON.stringify(job.progress ?? "")});
   async function poll() {
     try {
       const r = await fetch(location.pathname + '/status', { headers: { accept: 'application/json' } });
       const j = await r.json();
       document.getElementById('status').textContent = j.status;
-      if (j.progress) document.getElementById('progress').textContent = j.progress;
+      renderChecklist(stepIndexFor(j.progress), j.progress);
       if (j.status === 'done' || j.status === 'failed') { location.reload(); return; }
     } catch (e) {}
     setTimeout(poll, 3000);

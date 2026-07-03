@@ -7,9 +7,10 @@ import {
   countActiveJobsByEmail,
   deleteJob,
   failStuckJobs,
-  getDoneJobsByEmail,
   getJob,
+  getJobsByEmail,
   getRecentDoneJobs,
+  getRecentDoneJobsExcludingEmail,
   markJobDone,
   markJobFailed,
   markJobRunning,
@@ -132,10 +133,9 @@ describe("job lifecycle", () => {
     expect(j?.progress).toBe("Importing frame 3/24…");
   });
 
-  it("lists recent done jobs (with result_key) globally and per email", async () => {
+  it("lists recent done jobs globally and excluding one email", async () => {
     const a = await createJob(DB, { ...sampleJob, email: "a@x.com" }, 1000);
     const b = await createJob(DB, { ...sampleJob, email: "b@x.com" }, 1000);
-    const pending = await createJob(DB, { ...sampleJob, email: "a@x.com" }, 1000);
     await markJobRunning(DB, a.id, 1100);
     await markJobDone(DB, a.id, "jobs/a/x.gif", 1200);
     await markJobRunning(DB, b.id, 1100);
@@ -145,9 +145,31 @@ describe("job lifecycle", () => {
     expect(recent.map((j) => j.id)).toEqual([b.id, a.id]); // newest finished first
     expect(recent.every((j) => j.result_key)).toBe(true);
 
-    const mine = await getDoneJobsByEmail(DB, "a@x.com", 10);
-    expect(mine.map((j) => j.id)).toEqual([a.id]); // not b's, not the still-queued one
-    expect(pending.status).toBe("queued");
+    // "others" gallery for a@x.com excludes a@x.com's own maps.
+    const others = await getRecentDoneJobsExcludingEmail(DB, "a@x.com", 10);
+    expect(others.map((j) => j.id)).toEqual([b.id]);
+  });
+
+  it("getJobsByEmail returns a user's jobs of any status, newest first", async () => {
+    const done = await createJob(DB, { ...sampleJob, email: "a@x.com" }, 1000);
+    const running = await createJob(DB, { ...sampleJob, email: "a@x.com" }, 2000);
+    const queued = await createJob(DB, { ...sampleJob, email: "a@x.com" }, 3000);
+    await createJob(DB, { ...sampleJob, email: "b@x.com" }, 3000); // another user's
+    await markJobRunning(DB, done.id, 1100);
+    await markJobDone(DB, done.id, "jobs/a/x.gif", 1200);
+    await markJobRunning(DB, running.id, 2100);
+
+    const mine = await getJobsByEmail(DB, "a@x.com", 10);
+    // Newest created first; includes the in-progress and queued jobs, not b@x.com's.
+    expect(mine.map((j) => j.id)).toEqual([queued.id, running.id, done.id]);
+    expect(mine.map((j) => j.status)).toEqual(["queued", "running", "done"]);
+  });
+
+  it("persists an optional name on a job", async () => {
+    const named = await createJob(DB, { ...sampleJob, name: "Downtown Rochester" }, 1000);
+    expect((await getJob(DB, named.id))?.name).toBe("Downtown Rochester");
+    const unnamed = await createJob(DB, sampleJob, 1000);
+    expect((await getJob(DB, unnamed.id))?.name).toBeNull();
   });
 
   it("counts only active (queued/running) jobs per email", async () => {
