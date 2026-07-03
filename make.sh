@@ -56,7 +56,9 @@ if [ ! -s "$ROOT/openstreetmap-carto/project.xml" ] ; then
   cd "$ROOT/openstreetmap-carto"
   if [ ! -s project.xml ] || [ project.mml -nt project.xml ] ; then
     TMP=$(mktemp -p . tmp.project.XXXXXX.xml)
-    ./node_modules/.bin/carto -a 3.0.0 project.mml > "$TMP"
+    # No -a/API pin: let carto use its bundled mapnik-reference, which knows the
+    # mapnik 4.x CartoCSS properties (line-pattern-cap, etc.) that carto v6 uses.
+    ./node_modules/.bin/carto project.mml > "$TMP"
     mv "$TMP" project.xml
   fi
 fi
@@ -66,6 +68,12 @@ if [ "$(psql -At -c "select count(*) from pg_database where datname = 'gis';")" 
   createdb gis
   psql -d gis -c "create extension postgis;"
   psql -d gis -c "create extension hstore;"
+  # JIT hurts map-rendering queries; openstreetmap-carto recommends disabling it.
+  psql -d gis -c "alter system set jit = off;" -c "select pg_reload_conf();"
+  # openstreetmap-carto v6 (flex backend) needs helper functions and the
+  # carto_pois whitelist table loaded once into the database.
+  psql -d gis -f "$ROOT/openstreetmap-carto/functions.sql"
+  psql -d gis -f "$ROOT/openstreetmap-carto/common-values.sql"
 fi
 
 if [ ! -e "$ROOT/openstreetmap-carto/data/.external-data-done" ] ; then
@@ -97,9 +105,9 @@ END
 # Generate timestamps
 TIMESTAMPS=$(generate_timestamps "$TIME_BEFORE" "$TIME_AFTER" "$NUM_FRAMES")
 
-# Shared osm2pgsql args — MUST be identical for --create and --append or append breaks.
-OSM2PGSQL_ARGS=(-G --hstore --style openstreetmap-carto.style \
-                --tag-transform-script openstreetmap-carto.lua -d gis)
+# Shared osm2pgsql args — MUST be identical for --create and --append or append
+# breaks. openstreetmap-carto v6 uses the flex output backend (single lua style).
+OSM2PGSQL_ARGS=(--output flex --style openstreetmap-carto-flex.lua -d gis)
 
 # Process each timestamp. Frame 0 is a full slim create; later frames apply only
 # the OsmChange delta from the previous frame's snapshot (osmium derive-changes),

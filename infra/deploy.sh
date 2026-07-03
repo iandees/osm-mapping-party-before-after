@@ -29,6 +29,7 @@ $AWS cloudformation deploy \
   --template-file "$ROOT/infra/template.yaml" \
   --stack-name osm-before-after \
   --capabilities CAPABILITY_NAMED_IAM \
+  --tags "Project=OSM Mapping Party" \
   --parameter-overrides \
     "Subnets=subnet-de35c1f5,subnet-35d87242,subnet-b978ade0" \
     "SecurityGroupId=sg-c08193a5" \

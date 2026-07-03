@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isValidEmail, suggestedZoom, validateJobInput } from "../src/validation";
+import { isValidEmail, NAME_MAX, suggestedZoom, validateJobInput } from "../src/validation";
 
 const MAX_AREA = 1.0;
 
@@ -33,6 +33,20 @@ describe("validateJobInput", () => {
       expect(res.value.num_frames).toBe(2);
       expect(res.value.time_before).toBe("2020-01-01T00:00:00Z");
     }
+  });
+
+  it("treats name as optional: trims, caps, and nulls empties", () => {
+    const absent = validateJobInput(valid, MAX_AREA);
+    expect(absent.ok && absent.value.name).toBeNull();
+
+    const blank = validateJobInput({ ...valid, name: "   " }, MAX_AREA);
+    expect(blank.ok && blank.value.name).toBeNull();
+
+    const named = validateJobInput({ ...valid, name: "  Downtown Rochester  " }, MAX_AREA);
+    expect(named.ok && named.value.name).toBe("Downtown Rochester");
+
+    const long = validateJobInput({ ...valid, name: "x".repeat(NAME_MAX + 50) }, MAX_AREA);
+    expect(long.ok && long.value.name?.length).toBe(NAME_MAX);
   });
 
   it("rejects an oversized bbox", () => {
