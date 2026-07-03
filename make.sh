@@ -144,15 +144,19 @@ for TIME in $TIMESTAMPS; do
       echo "Generating zoom ${ZOOM} at time ${TIME}"
       GENERATED="$PREFIX.$TIME.$BBOX_COMMA.z${ZOOM}.png"
       nik4.py openstreetmap-carto/project.xml "$GENERATED" -b $BBOX_SPACE -z "$ZOOM" || break
-      # Add padding to the bottom of the image to make space for the attribution
+      # Add padding to the bottom of the image to make space for the attribution.
+      # The attribution/timestamp overlay is legally required (ODbL), so these
+      # steps must NOT be `|| break`-swallowed: a font/render failure here has to
+      # fail the whole job (via `set -o errexit`) rather than silently ship a
+      # frame with no attribution baked in.
       NEW_PADDED="$(mktemp tmp.XXXXXX.padded.png)"
-      gm convert "$GENERATED" -background white -gravity south -extent -0-30 "$NEW_PADDED" || break
+      gm convert "$GENERATED" -background white -gravity south -extent -0-30 "$NEW_PADDED"
       # Add the attribution and timestamp
       NEW_ATTRIBUTION="$(mktemp tmp.XXXXXX.attribution.png)"
       gm convert "$NEW_PADDED" -font Courier -pointsize 20 -fill black \
                                -gravity southwest -draw "text 5,5 '${TIME}'" \
                                -gravity southeast -draw "text 5,5 'Data © OpenStreetMap contributors, ODbL'" \
-                               "$NEW_ATTRIBUTION" || break
+                               "$NEW_ATTRIBUTION"
       mv "$NEW_ATTRIBUTION" "$GENERATED"
       rm "$NEW_PADDED"
     fi

@@ -18,6 +18,7 @@ RUN apt-get update --quiet \
  fonts-noto-hinted \
  fonts-noto-unhinted \
  fonts-unifont \
+ fonts-urw-base35 \
  gdal-bin \
  graphicsmagick \
  liblua5.3-dev \
