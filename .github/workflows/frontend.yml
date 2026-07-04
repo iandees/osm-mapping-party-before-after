@@ -4,10 +4,12 @@ on:
   pull_request:
     paths:
       - 'frontend/**'
+      - '.github/workflows/frontend.yml'
   push:
     branches: [web-frontend]
     paths:
       - 'frontend/**'
+      - '.github/workflows/frontend.yml'
 
 concurrency:
   group: frontend-${{ github.ref }}
@@ -25,7 +27,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
@@ -48,7 +50,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
