@@ -45,4 +45,9 @@ export interface Env {
   MAX_BBOX_AREA: string;
   MAX_ACTIVE_JOBS_PER_EMAIL: string;
   STUCK_JOB_TIMEOUT_SECONDS: string;
+  // Seconds added to time_after to decide when a future job dispatches (lets OSM
+  // replication publish diffs covering the end-time). Default 600 if unset.
+  DISPATCH_BUFFER_SECONDS?: string;
+  // Reject a time_after more than this many days ahead of now. Default 60 if unset.
+  MAX_FUTURE_HORIZON_DAYS?: string;
 }

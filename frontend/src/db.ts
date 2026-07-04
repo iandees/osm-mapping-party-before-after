@@ -7,7 +7,7 @@ import { FARGATE_HOURLY_USD } from "./cost";
 // job that failed before it ever ran → cost 0.
 const COST_SQL = "MAX(0, ? - COALESCE(started_at, ?)) / 3600.0 * ?";
 
-export type JobStatus = "queued" | "running" | "done" | "failed";
+export type JobStatus = "scheduled" | "queued" | "running" | "done" | "failed";
 
 export interface Job {
   id: string;
@@ -25,6 +25,8 @@ export interface Job {
   result_key: string | null; // full R2 object key of the finished GIF
   cost_usd: number | null; // frozen Fargate compute-cost estimate, set at terminal state
   created_at: number;
+  scheduled_for: number | null; // when a future job should be dispatched; NULL if immediate
+  queued_at: number | null; // when the job was dispatched to the queue; drives the reaper clock
   started_at: number | null;
   finished_at: number | null;
 }
@@ -80,17 +82,27 @@ export async function consumeLoginToken(
 
 // ---- Jobs ---------------------------------------------------------------
 
+/**
+ * Insert a job. Pass `scheduledFor` (epoch seconds) to defer it: if it is in the
+ * future (> now), the job is created `scheduled` and held for the dispatcher;
+ * otherwise it is created `queued` and ready to enqueue immediately. `queued_at`
+ * is stamped now for immediate jobs (uniform reaper clock) and left NULL for
+ * scheduled ones (stamped when they are later dispatched).
+ */
 export async function createJob(
   db: D1Database,
   job: NewJob,
   now = nowSeconds(),
+  scheduledFor: number | null = null,
 ): Promise<Job> {
   const id = crypto.randomUUID();
+  const scheduled = scheduledFor != null && scheduledFor > now;
+  const status: JobStatus = scheduled ? "scheduled" : "queued";
   await db
     .prepare(
       `INSERT INTO jobs
-        (id, email, name, bbox, time_before, time_after, zoom, output_px, num_frames, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
+        (id, email, name, bbox, time_before, time_after, zoom, output_px, num_frames, status, created_at, scheduled_for, queued_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       id,
@@ -102,7 +114,10 @@ export async function createJob(
       job.zoom,
       job.output_px,
       job.num_frames,
+      status,
       now,
+      scheduled ? scheduledFor : null,
+      scheduled ? null : now,
     )
     .run();
   const created = await getJob(db, id);
@@ -114,18 +129,56 @@ export async function getJob(db: D1Database, id: string): Promise<Job | null> {
   return db.prepare("SELECT * FROM jobs WHERE id = ?").bind(id).first<Job>();
 }
 
-/** Count non-terminal jobs (queued or running) for an email, for rate limiting. */
+/**
+ * Count non-terminal jobs (scheduled, queued, or running) for an email, for rate
+ * limiting. Scheduled jobs count too: they are in-flight from the user's view and
+ * this prevents scheduling a flood of future renders.
+ */
 export async function countActiveJobsByEmail(
   db: D1Database,
   email: string,
 ): Promise<number> {
   const row = await db
     .prepare(
-      "SELECT COUNT(*) AS n FROM jobs WHERE email = ? AND status IN ('queued','running')",
+      "SELECT COUNT(*) AS n FROM jobs WHERE email = ? AND status IN ('scheduled','queued','running')",
     )
     .bind(email)
     .first<{ n: number }>();
   return row?.n ?? 0;
+}
+
+/** Scheduled jobs whose dispatch time has arrived, oldest first, for the dispatcher. */
+export async function getDueScheduledJobs(
+  db: D1Database,
+  now = nowSeconds(),
+  limit = 50,
+): Promise<Job[]> {
+  const res = await db
+    .prepare(
+      "SELECT * FROM jobs WHERE status = 'scheduled' AND scheduled_for <= ? ORDER BY scheduled_for ASC LIMIT ?",
+    )
+    .bind(now, limit)
+    .all<Job>();
+  return res.results ?? [];
+}
+
+/**
+ * scheduled -> queued, stamping `queued_at` (the reaper clock). Atomic: only one
+ * caller can win the transition, so overlapping dispatcher ticks can't double-enqueue.
+ * Returns true if the transition applied.
+ */
+export async function markJobQueued(
+  db: D1Database,
+  id: string,
+  now = nowSeconds(),
+): Promise<boolean> {
+  const res = await db
+    .prepare(
+      "UPDATE jobs SET status = 'queued', queued_at = ? WHERE id = ? AND status = 'scheduled'",
+    )
+    .bind(now, id)
+    .run();
+  return res.meta.changes > 0;
 }
 
 /** Update the free-text progress message (no status change). */
@@ -229,9 +282,12 @@ export async function markJobDone(
 }
 
 /**
- * Fail any jobs stuck in queued/running past `timeoutSeconds` (measured from
- * creation). Catches infra failures and render crashes that never call back.
- * Returns the affected jobs so the caller can notify them.
+ * Fail any jobs stuck in queued/running past `timeoutSeconds`, measured from when
+ * the job was dispatched to the queue (`queued_at`, falling back to `created_at`),
+ * NOT from creation — a job scheduled days out only starts its clock when it is
+ * dispatched. `scheduled` jobs are excluded (they aren't in the queue yet). Catches
+ * infra failures and render crashes that never call back; returns the affected jobs
+ * so the caller can notify them.
  */
 export async function failStuckJobs(
   db: D1Database,
@@ -242,7 +298,7 @@ export async function failStuckJobs(
   const res = await db
     .prepare(
       `UPDATE jobs SET status = 'failed', error = 'Render timed out', finished_at = ?, cost_usd = ${COST_SQL} ` +
-        "WHERE status IN ('queued','running') AND created_at < ? RETURNING id, email",
+        "WHERE status IN ('queued','running') AND COALESCE(queued_at, created_at) < ? RETURNING id, email",
     )
     .bind(now, now, now, FARGATE_HOURLY_USD, cutoff)
     .all<{ id: string; email: string }>();

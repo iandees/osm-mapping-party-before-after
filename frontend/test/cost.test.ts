@@ -18,6 +18,8 @@ const baseJob: Job = {
   result_key: "jobs/j1/x.gif",
   cost_usd: null,
   created_at: 1000,
+  scheduled_for: null,
+  queued_at: 1000,
   started_at: 1100,
   finished_at: 1200,
 };

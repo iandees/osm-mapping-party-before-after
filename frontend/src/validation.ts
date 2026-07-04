@@ -19,6 +19,10 @@ export const SIZE_DEFAULT = 800;
 // Optional human label for the map area. Trimmed and truncated, never required.
 export const NAME_MAX = 120;
 
+// A time_after more than this many days ahead of "now" is rejected (guards against
+// scheduling a render absurdly far out). Overridable via MAX_FUTURE_HORIZON_DAYS.
+export const DEFAULT_MAX_FUTURE_HORIZON_DAYS = 3;
+
 export function isValidEmail(email: unknown): email is string {
   return typeof email === "string" && email.length <= 254 && EMAIL_RE.test(email);
 }
@@ -105,6 +109,8 @@ function parseNum(s: unknown): number | null {
 export function validateJobInput(
   form: Record<string, unknown>,
   maxBboxArea: number,
+  now: number = Date.now() / 1000,
+  maxFutureHorizonDays: number = DEFAULT_MAX_FUTURE_HORIZON_DAYS,
 ): ValidationResult<JobInput> {
   const errors: string[] = [];
 
@@ -141,6 +147,13 @@ export function validateJobInput(
   if (!after) errors.push("time_after is not a valid date/time");
   if (before && after && Date.parse(before) >= Date.parse(after)) {
     errors.push("time_before must be earlier than time_after");
+  }
+  // A future time_after is allowed (the job is scheduled), but only up to a horizon.
+  if (after) {
+    const afterEpoch = Date.parse(after) / 1000;
+    if (afterEpoch - now > maxFutureHorizonDays * 86400) {
+      errors.push(`time_after cannot be more than ${maxFutureHorizonDays} days in the future`);
+    }
   }
 
   // ---- output size ----

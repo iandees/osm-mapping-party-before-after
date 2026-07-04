@@ -73,6 +73,19 @@ describe("validateJobInput", () => {
     expect(validateJobInput({ ...valid, time_before: "not-a-date" }, MAX_AREA).ok).toBe(false);
   });
 
+  it("allows a future time_after but rejects one beyond the horizon", () => {
+    const now = 1_000_000_000; // 2001-09-09, a fixed reference
+    const times = (afterOffsetDays: number) => ({
+      ...valid,
+      time_before: "2001-01-01T00:00:00Z",
+      time_after: new Date((now + afterOffsetDays * 86400) * 1000).toISOString(),
+    });
+    // 10 days out, within a 60-day horizon → allowed (a scheduled job).
+    expect(validateJobInput(times(10), MAX_AREA, now, 60).ok).toBe(true);
+    // 100 days out → beyond the horizon → rejected.
+    expect(validateJobInput(times(100), MAX_AREA, now, 60).ok).toBe(false);
+  });
+
   it("rejects bad output sizes", () => {
     expect(validateJobInput({ ...valid, output_px: "100" }, MAX_AREA).ok).toBe(false); // < SIZE_MIN
     expect(validateJobInput({ ...valid, output_px: "5000" }, MAX_AREA).ok).toBe(false); // > SIZE_MAX

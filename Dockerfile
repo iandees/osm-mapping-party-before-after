@@ -27,6 +27,7 @@ RUN apt-get update --quiet \
  mapnik-utils \
  npm \
  osm2pgsql \
+ osmctools \
  osmium-tool \
  python-is-python3 \
  python3-mapnik \

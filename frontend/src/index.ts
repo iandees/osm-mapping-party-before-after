@@ -16,16 +16,18 @@ import {
   createLoginToken,
   deleteJob,
   failStuckJobs,
+  getDueScheduledJobs,
   getJob,
   getJobsByEmail,
   getRecentDoneJobs,
   getRecentDoneJobsExcludingEmail,
   markJobDone,
   markJobFailed,
+  markJobQueued,
   markJobRunning,
   updateJobProgress,
 } from "./db";
-import { isValidEmail, validateJobInput } from "./validation";
+import { DEFAULT_MAX_FUTURE_HORIZON_DAYS, isValidEmail, validateJobInput } from "./validation";
 import { enqueueRenderJob } from "./aws";
 import { sendFailureEmail, sendLoginEmail, sendResultEmail } from "./email";
 import { aboutPage, checkEmailPage, formPage, jobPage, loginPage } from "./templates";
@@ -97,7 +99,9 @@ app.post("/submit", requireSession(), async (c) => {
   ]);
   const form = await c.req.parseBody();
   const maxArea = Number(c.env.MAX_BBOX_AREA) || 1.0;
-  const result = validateJobInput(form as Record<string, unknown>, maxArea);
+  const now = Math.floor(Date.now() / 1000);
+  const horizon = Number(c.env.MAX_FUTURE_HORIZON_DAYS) || DEFAULT_MAX_FUTURE_HORIZON_DAYS;
+  const result = validateJobInput(form as Record<string, unknown>, maxArea, now, horizon);
   if (!result.ok) return c.html(formPage(email, mine, others, result.errors.join("; ")), 400);
 
   const cap = Number(c.env.MAX_ACTIVE_JOBS_PER_EMAIL) || 3;
@@ -108,7 +112,19 @@ app.post("/submit", requireSession(), async (c) => {
     );
   }
 
-  const job = await createJob(c.env.DB, { email, ...result.value });
+  // If the end-time is still in the future, defer the job: dispatch it once
+  // time_after + buffer has passed (see the scheduled cron handler below).
+  const buffer = Number(c.env.DISPATCH_BUFFER_SECONDS) || 600;
+  const afterEpoch = Math.floor(Date.parse(result.value.time_after) / 1000);
+  const scheduledFor = afterEpoch + buffer;
+  const scheduled = scheduledFor > now;
+
+  const job = await createJob(c.env.DB, { email, ...result.value }, now, scheduled ? scheduledFor : null);
+  if (scheduled) {
+    // Held for the dispatcher — nothing to enqueue yet. The job page shows the
+    // scheduled state and polls until it dispatches.
+    return c.redirect(`/jobs/${job.id}`, 302);
+  }
   try {
     await enqueueRenderJob(c.env, job.id);
   } catch (e) {
@@ -251,11 +267,37 @@ async function reapStuckJobs(env: Env): Promise<void> {
   if (failed.length) console.log(`reaped ${failed.length} stuck job(s)`);
 }
 
+// Scheduled-job dispatcher: enqueue any deferred jobs whose dispatch time has
+// arrived. The scheduled->queued transition is claimed atomically first so
+// overlapping ticks can't double-enqueue; if the enqueue then fails, the job is
+// failed immediately (and the requester emailed) rather than left dangling.
+export async function dispatchDueJobs(env: Env): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const due = await getDueScheduledJobs(env.DB, now);
+  let dispatched = 0;
+  for (const job of due) {
+    if (!(await markJobQueued(env.DB, job.id, now))) continue; // lost the race
+    try {
+      await enqueueRenderJob(env, job.id);
+      dispatched++;
+    } catch (e) {
+      console.error("dispatch enqueue failed", e);
+      await markJobFailed(env.DB, job.id, "Could not queue the scheduled render.");
+      try {
+        await sendFailureEmail(env, job.email, `${env.PUBLIC_BASE_URL}/jobs/${job.id}`);
+      } catch (e2) {
+        console.error("dispatch failure email failed", e2);
+      }
+    }
+  }
+  if (dispatched) console.log(`dispatched ${dispatched} scheduled job(s)`);
+}
+
 // Named export for tests; default export is the Worker handler (fetch + scheduled).
 export { app };
 export default {
   fetch: app.fetch,
   scheduled: async (_event: ScheduledController, env: Env, ctx: ExecutionContext) => {
-    ctx.waitUntil(reapStuckJobs(env));
+    ctx.waitUntil(Promise.all([reapStuckJobs(env), dispatchDueJobs(env)]));
   },
 };
