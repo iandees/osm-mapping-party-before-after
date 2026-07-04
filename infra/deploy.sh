@@ -10,6 +10,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 set -a; . "$ROOT/frontend/.deploy.secrets"; set +a
+GITHUB_OIDC_PROVIDER_ARN="${GITHUB_OIDC_PROVIDER_ARN:-}"
 
 AWS="uv run --with awscli aws --profile openaddresses --region us-east-1"
 
@@ -40,7 +41,8 @@ $AWS cloudformation deploy \
     "GeofabrikPassword=$GEOFABRIK_PASSWORD" \
     "R2AccessKeyId=$R2_ACCESS_KEY_ID" \
     "R2SecretAccessKey=$R2_SECRET_ACCESS_KEY" \
-    "CallbackSecret=$CALLBACK_SECRET"
+    "CallbackSecret=$CALLBACK_SECRET" \
+    "GitHubOidcProviderArn=$GITHUB_OIDC_PROVIDER_ARN"
 
 echo "Stack deployed. Non-sensitive outputs:"
 uv run --with awscli aws --profile openaddresses --region us-east-1 \
