@@ -164,7 +164,7 @@ export function loginPage(error?: string, recent: Job[] = []): string {
   return layout(
     "Sign in — OSM before/after",
     `<h1>OSM before/after map</h1>
-<p>See how an area of OpenStreetMap changed over time. Sign in with your email to make your own.</p>
+<p>See how an area of OpenStreetMap changed over time. Sign in with your email to make your own — every map is public and shows up here for everyone to see.</p>
 ${error ? `<p class="error">${esc(error)}</p>` : ""}
 <form method="post" action="/login">
   <label for="email">Email</label>
@@ -263,6 +263,7 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
     </div>
   </div>
 
+  <p class="muted" id="publicnote">📢 Every map you make is <strong>public</strong> — once it's done it appears in the gallery below and on the sign-in page, where anyone can see it.</p>
   <button type="submit">Build my map</button>
 </form>
 <script>
@@ -387,7 +388,7 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
     }
   });
 </script>
-${galleryGrid(jobs, "Your maps", true)}
+${galleryGrid(jobs, "Your maps (public)", true)}
 ${galleryGrid(others, "Maps from others")}`,
     head,
   );
