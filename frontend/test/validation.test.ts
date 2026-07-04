@@ -73,11 +73,19 @@ describe("validateJobInput", () => {
     expect(validateJobInput({ ...valid, time_before: "not-a-date" }, MAX_AREA).ok).toBe(false);
   });
 
+  it("rejects a start date before the OSM data floor", () => {
+    const res = validateJobInput({ ...valid, time_before: "2005-06-01T00:00:00Z" }, MAX_AREA);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.errors.join()).toMatch(/2007/);
+    // The floor date itself is allowed.
+    expect(validateJobInput({ ...valid, time_before: "2007-01-01T00:00:00Z" }, MAX_AREA).ok).toBe(true);
+  });
+
   it("allows a future time_after but rejects one beyond the horizon", () => {
-    const now = 1_000_000_000; // 2001-09-09, a fixed reference
+    const now = 1_717_200_000; // 2024-06-01, a fixed reference
     const times = (afterOffsetDays: number) => ({
       ...valid,
-      time_before: "2001-01-01T00:00:00Z",
+      time_before: "2024-01-01T00:00:00Z",
       time_after: new Date((now + afterOffsetDays * 86400) * 1000).toISOString(),
     });
     // 10 days out, within a 60-day horizon → allowed (a scheduled job).

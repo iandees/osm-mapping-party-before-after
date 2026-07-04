@@ -3,6 +3,7 @@ import { formatCostUsd, jobCostUsd } from "./cost";
 import {
   FRAMES_MAX,
   FRAMES_MIN,
+  MIN_START_DATE_LOCAL,
   NAME_MAX,
   SIZE_DEFAULT,
   SIZE_MAX,
@@ -270,11 +271,11 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
   <div class="row">
     <div>
       <label for="time_before">Before</label>
-      <input id="time_before" name="time_before" type="datetime-local" required>
+      <input id="time_before" name="time_before" type="datetime-local" min="${MIN_START_DATE_LOCAL}" required>
     </div>
     <div>
       <label for="time_after">After</label>
-      <input id="time_after" name="time_after" type="datetime-local" required>
+      <input id="time_after" name="time_after" type="datetime-local" min="${MIN_START_DATE_LOCAL}" required>
     </div>
   </div>
   <p class="presets" id="presets">

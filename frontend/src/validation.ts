@@ -23,6 +23,13 @@ export const NAME_MAX = 120;
 // scheduling a render absurdly far out). Overridable via MAX_FUTURE_HORIZON_DAYS.
 export const DEFAULT_MAX_FUTURE_HORIZON_DAYS = 3;
 
+// Coarse floor on the start date (time_before). OSM has essentially no data before
+// this, so a start earlier than it renders an empty "before" frame. This is only a
+// UX guard; the render task enforces the region file's actual first timestamp.
+// The datetime-local form value (no timezone) that mirrors this floor.
+export const MIN_START_DATE_LOCAL = "2007-01-01T00:00";
+export const MIN_START_DATE = "2007-01-01T00:00:00Z";
+
 export function isValidEmail(email: unknown): email is string {
   return typeof email === "string" && email.length <= 254 && EMAIL_RE.test(email);
 }
@@ -145,6 +152,9 @@ export function validateJobInput(
   const after = parseIsoUtc(form.time_after);
   if (!before) errors.push("time_before is not a valid date/time");
   if (!after) errors.push("time_after is not a valid date/time");
+  if (before && Date.parse(before) < Date.parse(MIN_START_DATE)) {
+    errors.push(`time_before cannot be earlier than ${MIN_START_DATE.slice(0, 10)} (no OSM data exists before then)`);
+  }
   if (before && after && Date.parse(before) >= Date.parse(after)) {
     errors.push("time_before must be earlier than time_after");
   }
