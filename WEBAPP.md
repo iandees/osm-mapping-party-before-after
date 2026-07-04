@@ -121,3 +121,43 @@ bound data-extraction cost.
   concurrently up to the Batch compute environment's `MaxvCpus`.
 - Fargate ephemeral storage caps at 200 GiB (`EphemeralStorageGiB`); very large
   regions may need a different compute type.
+
+## CI/CD
+
+GitHub Actions builds, tests, and deploys — no maintainer machine required.
+
+- `.github/workflows/frontend.yml` — on PRs touching `frontend/**`, runs
+  `npm run typecheck` + `npm test`. On merge to `web-frontend`, applies D1
+  migrations (`--remote`) then `wrangler deploy`.
+- `.github/workflows/render-image.yml` — on PRs touching backend files
+  (`Dockerfile`, `render/**`, `make.sh`, `entrypoint-new.sh`, `docker_run.sh`,
+  the carto submodule), builds the amd64 image (no push). On merge to
+  `web-frontend`, pushes `:latest` + `:<sha>` to ECR. Batch's job definition
+  uses `:latest`, and Fargate resolves the tag at task launch, so the push is
+  the deploy — no stack update needed.
+
+### AWS access (OIDC — no stored keys)
+
+`infra/template.yaml` creates an IAM role (`osm-before-after-github-deploy`)
+that GitHub Actions assumes via OIDC. Trust is scoped to this repo on the
+`web-frontend` branch; permissions are limited to pushing to the render ECR
+repo. Re-run `infra/deploy.sh` once to create it, then copy the
+`GitHubDeployRoleArn` output into the GitHub secret below. If the AWS account
+already has a GitHub OIDC provider, set `GITHUB_OIDC_PROVIDER_ARN` in
+`frontend/.deploy.secrets` before deploying (find it with
+`aws iam list-open-id-connect-providers`).
+
+### Required GitHub configuration
+
+Repo → Settings → Secrets and variables → Actions:
+
+Secrets:
+- `AWS_DEPLOY_ROLE_ARN` — the stack's `GitHubDeployRoleArn` output.
+- `CLOUDFLARE_API_TOKEN` — scoped API token with:
+  - Account · Workers Scripts · Edit
+  - Account · D1 · Edit (for migrations)
+  - Zone · Workers Routes · Edit (on the `mapki.com` zone, for the custom domain)
+  - Account · Account Settings · Read
+
+Variables:
+- `CLOUDFLARE_ACCOUNT_ID` — `abb981ba94fd6c090352b253fe594676`.

@@ -41,6 +41,22 @@ Parameters:
     Type: Number
     Default: 30
 
+  # GitHub Actions OIDC deploy access.
+  GitHubRepo:
+    Type: String
+    Default: iandees/osm-mapping-party-before-after
+    Description: owner/repo allowed to assume the deploy role via OIDC.
+  GitHubBranch:
+    Type: String
+    Default: web-frontend
+    Description: Branch ref allowed to assume the deploy role.
+  GitHubOidcProviderArn:
+    Type: String
+    Default: ""
+    Description: >
+      ARN of an existing GitHub Actions OIDC provider in this account. Leave
+      empty to have this stack create one.
+
   # Secrets (NoEcho). Stored in Secrets Manager and injected into the task.
   GeofabrikUser:
     Type: String
@@ -59,6 +75,9 @@ Parameters:
     NoEcho: true
     Description: Shared secret the render task presents to the Worker's /internal API.
 
+Conditions:
+  CreateOidcProvider: !Equals [!Ref GitHubOidcProviderArn, ""]
+
 Resources:
   # ---- Image registry -------------------------------------------------
   RenderRepo:
@@ -67,6 +86,57 @@ Resources:
       RepositoryName: !Sub "${AWS::StackName}-render"
       ImageScanningConfiguration:
         ScanOnPush: true
+
+  # ---- GitHub Actions OIDC deploy access -----------------------------
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-github-deploy"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Ref GitHubOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepo}:ref:refs/heads/${GitHubBranch}"
+      Policies:
+        - PolicyName: ecr-push-render-image
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: EcrAuth
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: EcrPushPull
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource: !GetAtt RenderRepo.Arn
 
   # ---- Region history cache ------------------------------------------
   RegionCacheBucket:
@@ -294,6 +364,9 @@ Outputs:
   EcrRepositoryUri:
     Description: Push the render image here.
     Value: !GetAtt RenderRepo.RepositoryUri
+  GitHubDeployRoleArn:
+    Description: Role ARN for the GitHub Actions AWS_DEPLOY_ROLE_ARN secret.
+    Value: !GetAtt GitHubDeployRole.Arn
   QueueUrl:
     Description: Set as the Worker's SQS_QUEUE_URL.
     Value: !Ref RenderQueue

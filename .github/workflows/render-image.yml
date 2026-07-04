@@ -1,0 +1,75 @@
+name: Render image
+
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'render/**'
+      - 'make.sh'
+      - 'entrypoint-new.sh'
+      - 'docker_run.sh'
+      - 'openstreetmap-carto'
+      - '.github/workflows/render-image.yml'
+  push:
+    branches: [web-frontend]
+    paths:
+      - 'Dockerfile'
+      - 'render/**'
+      - 'make.sh'
+      - 'entrypoint-new.sh'
+      - 'docker_run.sh'
+      - 'openstreetmap-carto'
+      - '.github/workflows/render-image.yml'
+
+concurrency:
+  group: render-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: osm-before-after-render
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: 'true'
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Configure AWS credentials (OIDC)
+        if: github.event_name == 'push'
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        if: github.event_name == 'push'
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
+
+      - name: Compute image tags
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            REG="${{ steps.login-ecr.outputs.registry }}"
+            echo "tags=$REG/${ECR_REPOSITORY}:latest,$REG/${ECR_REPOSITORY}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=${ECR_REPOSITORY}:pr" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
