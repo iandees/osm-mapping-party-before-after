@@ -4,10 +4,12 @@ on:
   pull_request:
     paths:
       - 'frontend/**'
+      - '.github/workflows/frontend.yml'
   push:
     branches: [web-frontend]
     paths:
       - 'frontend/**'
+      - '.github/workflows/frontend.yml'
 
 concurrency:
   group: frontend-${{ github.ref }}
