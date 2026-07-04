@@ -31,7 +31,7 @@ import requests
 
 ROOT = os.environ.get("APP_ROOT", "/home/postgres")
 sys.path.insert(0, os.path.join(ROOT, "render"))
-from region import region_history_url, region_id, select_region  # noqa: E402
+from region import region_history_url, region_id, region_updates_url, select_region  # noqa: E402
 from catchup import bring_bbox_up_to_date  # noqa: E402
 
 
@@ -276,9 +276,16 @@ def main() -> int:
             )
         # Bring the data up to the (possibly very recent / just-passed) after-time by
         # applying OSM replication diffs clipped to the bbox — the cached Geofabrik
-        # extract lags ~a day, which would drop edits near the after-time.
+        # extract lags ~a day, which would drop edits near the after-time. Catch up
+        # from the region's tiny Geofabrik daily update stream first, then the global
+        # planet stream only for the sub-day tail (see catchup.bring_bbox_up_to_date).
         history_file = bring_bbox_up_to_date(
-            history_file, params["bbox"], params["time_after"], ROOT, progress=worker.progress
+            history_file,
+            params["bbox"],
+            params["time_after"],
+            ROOT,
+            updates_url=region_updates_url(feature),
+            progress=worker.progress,
         )
         run_make(history_file, params, worker)
 
