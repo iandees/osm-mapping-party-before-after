@@ -115,6 +115,31 @@ describe("home", () => {
     expect(html).toContain("$0.117 USD");
   });
 
+  it("links the bbox to OSM.org and shows a friendly UTC time range", async () => {
+    const { env: e } = testEnv();
+    const job = await createJob(env.DB, {
+      email: "someone@example.com",
+      bbox: "-0.2,51.4,0,51.6",
+      time_before: "2020-01-01T00:00:00Z",
+      time_after: "2024-06-15T14:30:00Z",
+      zoom: 12,
+      output_px: 400,
+      num_frames: 2,
+    });
+    await markJobRunning(env.DB, job.id);
+    await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`);
+
+    const html = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
+    // bbox linked to OSM.org with the box outlined (order = minlon,minlat,maxlon,maxlat)
+    expect(html).toContain(
+      "https://www.openstreetmap.org/?minlon=-0.2&amp;minlat=51.4&amp;maxlon=0&amp;maxlat=51.6&amp;box=yes",
+    );
+    // friendly UTC range: midnight drops the time, a non-midnight time keeps HH:MM
+    expect(html).toContain("1 Jan 2020 → 15 Jun 2024, 14:30 UTC");
+    // the raw ISO timestamps are no longer shown
+    expect(html).not.toContain("2024-06-15T14:30:00Z");
+  });
+
   it("shows a signed-in user their in-progress maps and others' finished maps", async () => {
     const { env: e } = testEnv();
     const cookie = await sessionCookie(e, "me@example.com");

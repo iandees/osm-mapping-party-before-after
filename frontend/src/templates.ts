@@ -20,6 +20,45 @@ function fmtWhen(epochSeconds: number | null): string {
   return new Date(epochSeconds * 1000).toISOString().slice(0, 16).replace("T", " ") + " UTC";
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * Format an ISO-8601 UTC timestamp as a friendly UTC date-time, e.g.
+ * "3 Jul 2026, 14:10" (the "UTC" suffix is added once by the range formatter).
+ * A timestamp landing exactly on midnight drops the time part. Falls back to the
+ * raw string if it can't be parsed.
+ */
+function fmtDateTime(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const d = new Date(t);
+  const date = `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  const hh = d.getUTCHours();
+  const mm = d.getUTCMinutes();
+  if (hh === 0 && mm === 0) return date;
+  return `${date}, ${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+/** A nicely formatted UTC time range, e.g. "3 Jul 2026 → 1 Aug 2026 UTC". */
+function fmtTimeRange(before: string, after: string): string {
+  return `${fmtDateTime(before)} → ${fmtDateTime(after)} UTC`;
+}
+
+/** OSM.org URL that zooms to and outlines a "minlon,minlat,maxlon,maxlat" bbox. */
+function osmBboxUrl(bbox: string): string {
+  const [l, b, r, t] = bbox.split(",");
+  return `https://www.openstreetmap.org/?minlon=${l}&minlat=${b}&maxlon=${r}&maxlat=${t}&box=yes`;
+}
+
+/** The muted metadata line for a job page: bbox linked to OSM.org + a friendly UTC time range. */
+function jobMeta(job: Job): string {
+  return (
+    `<a href="${esc(osmBboxUrl(job.bbox))}" target="_blank" rel="noopener" ` +
+    `title="View this area on OpenStreetMap">📍 ${esc(job.bbox)}</a>` +
+    ` · ${esc(fmtTimeRange(job.time_before, job.time_after))}`
+  );
+}
+
 function layout(title: string, body: string, head = ""): string {
   return `<!doctype html>
 <html lang="en">
@@ -147,7 +186,7 @@ function galleryGrid(jobs: Job[], heading: string, owned = false): string {
       const label = cardLabel(j);
       return (
         `<div class="card">` +
-        `<a href="/jobs/${esc(j.id)}" title="${esc(label)} · ${esc(j.time_before)} → ${esc(j.time_after)}">` +
+        `<a href="/jobs/${esc(j.id)}" title="${esc(label)} · ${esc(fmtTimeRange(j.time_before, j.time_after))}">` +
         cardInner(j) +
         `<span class="caption">${esc(label)}</span>${cardCost(j)}</a>` +
         (owned ? deleteForm(j.id, "del", "×") : "") +
@@ -399,7 +438,7 @@ export function jobPage(job: Job, isOwner = false): string {
     return layout(
       hasName ? job.name! : "Your map is ready",
       `<h1>${hasName ? esc(job.name!) : "Your before/after map"}</h1>
-<p class="muted">${esc(job.bbox)} · ${esc(job.time_before)} → ${esc(job.time_after)}</p>
+<p class="muted">${jobMeta(job)}</p>
 <img class="result" src="/r/${esc(job.result_key)}" alt="animated before/after map">
 ${costLine(job)}
 <p><a href="/">Make another</a>${isOwner ? ` · ${deleteForm(job.id, "delete-form", "Delete this map")}` : ""}</p>`,
@@ -421,7 +460,7 @@ ${costLine(job)}
     return layout(
       hasName ? `${job.name!} — scheduled` : "Map scheduled",
       `<h1>${hasName ? esc(job.name!) : "Your map"} is scheduled</h1>
-<p class="muted">${esc(job.bbox)} · ${esc(job.time_before)} → ${esc(job.time_after)}</p>
+<p class="muted">${jobMeta(job)}</p>
 <p>🕒 This render will start after its end-time, around <strong>${esc(fmtWhen(job.scheduled_for))}</strong>. We'll fetch fresh OpenStreetMap edits up to the end-time, then build the animation — you'll get an email when it's ready.</p>
 <p><a href="/">Make another</a>${isOwner ? ` · ${deleteForm(job.id, "delete-form", "Cancel this map")}` : ""}</p>
 <script>
