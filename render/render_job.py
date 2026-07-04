@@ -23,7 +23,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 import boto3
@@ -32,6 +32,7 @@ import requests
 ROOT = os.environ.get("APP_ROOT", "/home/postgres")
 sys.path.insert(0, os.path.join(ROOT, "render"))
 from region import region_history_url, region_id, select_region  # noqa: E402
+from catchup import bring_bbox_up_to_date  # noqa: E402
 
 
 def env(name: str, default: str | None = None) -> str:
@@ -125,10 +126,11 @@ def newest_data_timestamp(path: str) -> datetime | None:
 def ensure_region_file(feature: dict, time_after: str, worker: "Worker") -> str:
     """Return a local path to the region's history file, using an S3 cache.
 
-    The cache is refreshed from Geofabrik when it does not contain data as recent
-    as ``time_after`` — otherwise the render would silently miss recent edits. If
-    even a freshly downloaded file predates ``time_after`` (Geofabrik's daily lag),
-    we proceed with the best available data.
+    The cache is refreshed from Geofabrik only when it is more than
+    ``FRESH_BASE_MAX_AGE_DAYS`` older than ``time_after`` — the diff catch-up step
+    (see bring_bbox_up_to_date) fills the remaining tail up to ``time_after``, so a
+    slightly-stale base is fine and bounds how many replication diffs we apply. A
+    future ``time_after`` therefore does not force a re-download every time.
     """
     history_url = region_history_url(feature)
     # e.g. "europe/germany/bremen-internal.osh.pbf" — unique per region.
@@ -136,6 +138,8 @@ def ensure_region_file(feature: dict, time_after: str, worker: "Worker") -> str:
     cache_key = f"regions/{rel_path}"
     local = os.path.join(ROOT, rel_path.replace("/", "_"))
     want = _parse_iso(time_after)
+    max_age_days = int(env("FRESH_BASE_MAX_AGE_DAYS", "3"))
+    threshold = want - timedelta(days=max_age_days)
 
     s3 = boto3.client("s3")
     bucket = env("REGION_CACHE_BUCKET")
@@ -149,19 +153,16 @@ def ensure_region_file(feature: dict, time_after: str, worker: "Worker") -> str:
 
     if cached:
         newest = newest_data_timestamp(local)
-        if newest is not None and newest >= want:
-            print(f"region cache hit (data through {newest.isoformat()}): {cache_key}")
+        if newest is not None and newest >= threshold:
+            print(f"region cache fresh enough (data through {newest.isoformat()}, "
+                  f"threshold {threshold.isoformat()}): {cache_key}")
             return local
-        print(f"region cache stale (data through {newest}); refreshing from Geofabrik")
+        print(f"region cache too old (data through {newest}, need >= {threshold.isoformat()}); "
+              f"refreshing from Geofabrik")
 
     worker.progress("Downloading map history for the region…")
     download_from_geofabrik(history_url, local)
     s3.upload_file(local, bucket, cache_key)
-
-    fresh = newest_data_timestamp(local)
-    if fresh is not None and fresh < want:
-        print(f"warning: newest available data ({fresh.isoformat()}) predates requested "
-              f"after-time ({time_after}); rendering with best available data")
     return local
 
 
@@ -251,6 +252,12 @@ def main() -> int:
 
         worker.progress("Preparing map data…")
         history_file = ensure_region_file(feature, params["time_after"], worker)
+        # Bring the data up to the (possibly very recent / just-passed) after-time by
+        # applying OSM replication diffs clipped to the bbox — the cached Geofabrik
+        # extract lags ~a day, which would drop edits near the after-time.
+        history_file = bring_bbox_up_to_date(
+            history_file, params["bbox"], params["time_after"], ROOT, progress=worker.progress
+        )
         run_make(history_file, params, worker)
 
         worker.progress("Uploading your map…")

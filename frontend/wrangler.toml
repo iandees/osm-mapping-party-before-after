@@ -18,6 +18,11 @@ MAX_ACTIVE_JOBS_PER_EMAIL = "3"
 # Jobs still queued/running after this many seconds are failed by the reaper.
 # Generous, since 24-frame renders of larger areas can take a while.
 STUCK_JOB_TIMEOUT_SECONDS = "5400"
+# A future end-time defers the job; it dispatches this many seconds after time_after
+# (lets OSM replication publish diffs covering the end-time).
+DISPATCH_BUFFER_SECONDS = "600"
+# Reject a time_after more than this many days ahead of now.
+MAX_FUTURE_HORIZON_DAYS = "3"
 
 # Scheduled reaper for stuck jobs.
 [triggers]

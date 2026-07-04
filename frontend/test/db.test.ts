@@ -7,12 +7,14 @@ import {
   countActiveJobsByEmail,
   deleteJob,
   failStuckJobs,
+  getDueScheduledJobs,
   getJob,
   getJobsByEmail,
   getRecentDoneJobs,
   getRecentDoneJobsExcludingEmail,
   markJobDone,
   markJobFailed,
+  markJobQueued,
   markJobRunning,
   updateJobProgress,
   type NewJob,
@@ -211,5 +213,72 @@ describe("job lifecycle", () => {
     await markJobRunning(DB, a.id, 1100);
     await markJobDone(DB, a.id, "k", 1200);
     expect(await countActiveJobsByEmail(DB, sampleJob.email)).toBe(1);
+  });
+});
+
+describe("scheduled jobs", () => {
+  it("creates a scheduled job when scheduledFor is in the future", async () => {
+    const job = await createJob(DB, sampleJob, 1000, 5000);
+    expect(job.status).toBe("scheduled");
+    expect(job.scheduled_for).toBe(5000);
+    expect(job.queued_at).toBeNull();
+  });
+
+  it("creates a queued job when scheduledFor is not in the future", async () => {
+    const job = await createJob(DB, sampleJob, 1000, 500); // 500 <= 1000 → run now
+    expect(job.status).toBe("queued");
+    expect(job.scheduled_for).toBeNull();
+    expect(job.queued_at).toBe(1000);
+  });
+
+  it("stamps queued_at = now on an immediate (unscheduled) job", async () => {
+    const job = await createJob(DB, sampleJob, 1000);
+    expect(job.status).toBe("queued");
+    expect(job.queued_at).toBe(1000);
+    expect(job.scheduled_for).toBeNull();
+  });
+
+  it("getDueScheduledJobs returns only due jobs, oldest scheduled_for first", async () => {
+    const dueA = await createJob(DB, sampleJob, 1000, 3000);
+    const dueB = await createJob(DB, sampleJob, 1000, 2000);
+    await createJob(DB, sampleJob, 1000, 9000); // not yet due at now=5000
+    const due = await getDueScheduledJobs(DB, 5000);
+    expect(due.map((j) => j.id)).toEqual([dueB.id, dueA.id]); // 2000 before 3000
+  });
+
+  it("markJobQueued transitions scheduled -> queued exactly once", async () => {
+    const job = await createJob(DB, sampleJob, 1000, 2000);
+    expect(await markJobQueued(DB, job.id, 5000)).toBe(true);
+    const q = await getJob(DB, job.id);
+    expect(q?.status).toBe("queued");
+    expect(q?.queued_at).toBe(5000);
+    // A second (racing) call finds nothing to transition.
+    expect(await markJobQueued(DB, job.id, 6000)).toBe(false);
+  });
+
+  it("counts scheduled jobs toward the active total", async () => {
+    await createJob(DB, sampleJob, 1000, 9000); // scheduled
+    await createJob(DB, sampleJob, 1000); // queued
+    expect(await countActiveJobsByEmail(DB, sampleJob.email)).toBe(2);
+  });
+
+  it("reaper ignores scheduled jobs and clocks from queued_at, not created_at", async () => {
+    // Scheduled long ago (old created_at) but dispatched recently → must NOT be reaped.
+    const sched = await createJob(DB, sampleJob, 1000, 2000);
+    await markJobQueued(DB, sched.id, 100000); // dispatched at 100000
+    // A genuinely stuck job dispatched long ago.
+    const stuck = await createJob(DB, sampleJob, 1000); // queued_at = 1000
+    // now=101000, timeout=1000 → cutoff 100000.
+    const failed = await failStuckJobs(DB, 1000, 101000);
+    expect(failed.map((f) => f.id)).toEqual([stuck.id]);
+    expect((await getJob(DB, sched.id))?.status).toBe("queued");
+    expect((await getJob(DB, stuck.id))?.status).toBe("failed");
+  });
+
+  it("reaper never touches a still-scheduled job even if created long ago", async () => {
+    const sched = await createJob(DB, sampleJob, 1000, 9_000_000_000);
+    const failed = await failStuckJobs(DB, 1, 100000);
+    expect(failed).toHaveLength(0);
+    expect((await getJob(DB, sched.id))?.status).toBe("scheduled");
   });
 });

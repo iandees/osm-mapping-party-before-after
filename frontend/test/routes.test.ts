@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, it, expect, vi, afterEach } from "vitest";
-import { app } from "../src/index";
+import { app, dispatchDueJobs } from "../src/index";
+import type { Env } from "../src/env";
 import { createJob, createLoginToken, getJob, markJobDone, markJobRunning } from "../src/db";
 
 /** Log in as `email` and return the session cookie header value. */
@@ -278,6 +279,84 @@ describe("verify + submit", () => {
     expect(html).toContain('class="checklist"');
     expect(html).toContain("Extracting frames");
     expect(html).toContain("Uploading your map");
+  });
+});
+
+describe("scheduled submissions", () => {
+  const jobFields = {
+    bbox: "-0.2,51.4,0,51.6",
+    time_before: "2020-01-01T00:00:00Z",
+    time_after: "2024-01-01T00:00:00Z",
+    zoom: 12,
+    output_px: 400,
+    num_frames: 2,
+  };
+
+  it("defers a future-end-time submission instead of enqueuing it", async () => {
+    const { env: e } = testEnv();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("<ok/>", { status: 200 }));
+    const cookie = await sessionCookie(e, "user@example.com");
+    // +1 day (well within the future horizon), formatted like a datetime-local input.
+    const future = new Date(Date.now() + 1 * 86400 * 1000).toISOString().slice(0, 16);
+
+    const submit = await app.request(
+      new Request("https://app.example.com/submit", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+        body: new URLSearchParams({
+          bbox: "-0.2,51.4,0.0,51.6",
+          time_before: "2020-01-01T00:00",
+          time_after: future,
+          output_px: "800",
+          num_frames: "2",
+        }).toString(),
+      }),
+      {},
+      e,
+    );
+    expect(submit.status).toBe(302);
+    const jobId = (submit.headers.get("location") ?? "").split("/").pop()!;
+
+    const job = await getJob(env.DB, jobId);
+    expect(job?.status).toBe("scheduled");
+    expect(job?.scheduled_for).toBeGreaterThan(Math.floor(Date.now() / 1000));
+    // A scheduled job is NOT enqueued to SQS at submit time.
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const html = await (await app.request(`/jobs/${jobId}`, {}, e)).text();
+    expect(html).toMatch(/scheduled/i);
+  });
+
+  it("dispatchDueJobs enqueues a due scheduled job and marks it queued", async () => {
+    const { env: e } = testEnv();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("<ok/>", { status: 200 }));
+    // scheduled_for=2000 is far in the past under the real clock → already due.
+    const job = await createJob(env.DB, { email: "user@example.com", ...jobFields }, 1000, 2000);
+    expect(job.status).toBe("scheduled");
+
+    await dispatchDueJobs(e as unknown as Env);
+
+    const after = await getJob(env.DB, job.id);
+    expect(after?.status).toBe("queued");
+    expect(after?.queued_at ?? 0).toBeGreaterThan(0);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
+  it("dispatchDueJobs leaves a not-yet-due scheduled job alone", async () => {
+    const { env: e } = testEnv();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("<ok/>", { status: 200 }));
+    const job = await createJob(env.DB, { email: "user@example.com", ...jobFields }, 1000, 9_000_000_000);
+
+    await dispatchDueJobs(e as unknown as Env);
+
+    expect((await getJob(env.DB, job.id))?.status).toBe("scheduled");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 

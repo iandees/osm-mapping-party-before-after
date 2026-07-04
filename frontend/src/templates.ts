@@ -14,6 +14,12 @@ import {
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+/** Format an epoch-seconds timestamp as a compact UTC string, e.g. "2026-07-03 14:10 UTC". */
+function fmtWhen(epochSeconds: number | null): string {
+  if (epochSeconds == null) return "soon";
+  return new Date(epochSeconds * 1000).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+}
+
 function layout(title: string, body: string, head = ""): string {
   return `<!doctype html>
 <html lang="en">
@@ -103,6 +109,10 @@ function cardInner(j: Job): string {
   }
   if (j.status === "failed") {
     return `<div class="placeholder failed"><span>Failed</span></div>`;
+  }
+  if (j.status === "scheduled") {
+    // Not working yet — no spinner; show when it will run.
+    return `<div class="placeholder"><span>🕒 Scheduled for ${esc(fmtWhen(j.scheduled_for))}</span></div>`;
   }
   // queued | running
   const msg = j.progress ?? (j.status === "running" ? "Working…" : "Queued…");
@@ -403,6 +413,28 @@ ${costLine(job)}
 <p class="error">${esc(job.error ?? "The render failed.")}</p>
 ${costLine(job)}
 <p><a href="/">Try again</a></p>`,
+    );
+  }
+
+  if (job.status === "scheduled") {
+    // Deferred until its end-time passes. Poll and reload once it dispatches.
+    return layout(
+      hasName ? `${job.name!} — scheduled` : "Map scheduled",
+      `<h1>${hasName ? esc(job.name!) : "Your map"} is scheduled</h1>
+<p class="muted">${esc(job.bbox)} · ${esc(job.time_before)} → ${esc(job.time_after)}</p>
+<p>🕒 This render will start after its end-time, around <strong>${esc(fmtWhen(job.scheduled_for))}</strong>. We'll fetch fresh OpenStreetMap edits up to the end-time, then build the animation — you'll get an email when it's ready.</p>
+<p><a href="/">Make another</a>${isOwner ? ` · ${deleteForm(job.id, "delete-form", "Cancel this map")}` : ""}</p>
+<script>
+  async function poll() {
+    try {
+      const r = await fetch(location.pathname + '/status', { headers: { accept: 'application/json' } });
+      const j = await r.json();
+      if (j.status !== 'scheduled') { location.reload(); return; }
+    } catch (e) {}
+    setTimeout(poll, 15000);
+  }
+  setTimeout(poll, 15000);
+</script>`,
     );
   }
 
