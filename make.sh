@@ -144,24 +144,50 @@ for TIME in $TIMESTAMPS; do
       echo "Generating zoom ${ZOOM} at time ${TIME}"
       GENERATED="$PREFIX.$TIME.$BBOX_COMMA.z${ZOOM}.png"
       nik4.py openstreetmap-carto/project.xml "$GENERATED" -b $BBOX_SPACE -z "$ZOOM" || break
-      # Add a white band at the bottom of the image for the attribution/timestamp.
+      # Bake a white band with a timestamp (bottom-left) and the ODbL attribution
+      # (bottom-right) onto the bottom of the frame.
+      OVERLAY_FONT=/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf
+      ATTR_TEXT='Data © OpenStreetMap contributors, ODbL'
+      BASE_PT=20
+      IMG_W=$(gm identify -format '%w' "$GENERATED")
+      IMG_H=$(gm identify -format '%h' "$GENERATED")
+      # The two labels sit at opposite corners, so on a narrow frame a fixed point
+      # size makes them collide. Measure each label's rendered width at the base
+      # size (render to a throwaway PNG and read its width back; GraphicsMagick's
+      # `info:` coder is unreliable, but `gm identify` is what the rest of the
+      # script already uses) and, when the two ends plus corner margins won't fit
+      # across the frame, shrink the font by exactly that ratio so they just clear.
+      MARGIN=24   # left margin (6) + right margin (6) + gap between ends (12)
+      TS_MEASURE="$(mktemp tmp.XXXXXX.measure.png)"
+      gm convert -font "$OVERLAY_FONT" -pointsize "$BASE_PT" "label:${TIME}" "$TS_MEASURE"
+      TS_W=$(gm identify -format '%w' "$TS_MEASURE")
+      gm convert -font "$OVERLAY_FONT" -pointsize "$BASE_PT" "label:${ATTR_TEXT}" "$TS_MEASURE"
+      ATTR_W=$(gm identify -format '%w' "$TS_MEASURE")
+      rm "$TS_MEASURE"
+      PT=$BASE_PT
+      if [ "$((TS_W + ATTR_W + MARGIN))" -gt "$IMG_W" ] ; then
+        # Floor at 7pt so the legally-required attribution stays legible; on a
+        # degenerate sub-~200px frame the two ends may still touch, but that map
+        # is unusably tiny anyway.
+        PT=$(( BASE_PT * (IMG_W - MARGIN) / (TS_W + ATTR_W) ))
+        [ "$PT" -lt 7 ] && PT=7
+      fi
+      # Band height and the text's corner inset both track the point size
+      # (34px band / 7px inset at the base size of 20).
+      BAND=$(( PT * 34 / BASE_PT ))
+      OFF=$(( PT * 7 / BASE_PT ))
       # GraphicsMagick has no -splice and its bare `-extent -0-30` is a no-op here
       # (it silently leaves the canvas unchanged), so compute the target size and
       # extend the canvas explicitly with north gravity to keep the map flush top.
+      NEW_PADDED="$(mktemp tmp.XXXXXX.padded.png)"
+      gm convert "$GENERATED" -background white -gravity north -extent "${IMG_W}x$((IMG_H + BAND))" "$NEW_PADDED"
       # The overlay is legally required (ODbL), so these steps are NOT
       # `|| break`-swallowed: a font/render failure fails the whole job (via
       # `set -o errexit`) rather than silently shipping a frame with no attribution.
-      IMG_W=$(gm identify -format '%w' "$GENERATED")
-      IMG_H=$(gm identify -format '%h' "$GENERATED")
-      NEW_PADDED="$(mktemp tmp.XXXXXX.padded.png)"
-      gm convert "$GENERATED" -background white -gravity north -extent "${IMG_W}x$((IMG_H + 34))" "$NEW_PADDED"
-      # Draw the timestamp (bottom-left) and attribution (bottom-right) into the
-      # band. Noto Sans (fonts-noto-hinted, already in the image) is more compact
-      # and legible than Courier and leaves margin so the two ends don't collide.
       NEW_ATTRIBUTION="$(mktemp tmp.XXXXXX.attribution.png)"
-      gm convert "$NEW_PADDED" -font /usr/share/fonts/truetype/noto/NotoSans-Regular.ttf -pointsize 20 -fill black \
-                               -gravity southwest -draw "text 6,7 '${TIME}'" \
-                               -gravity southeast -draw "text 6,7 'Data © OpenStreetMap contributors, ODbL'" \
+      gm convert "$NEW_PADDED" -font "$OVERLAY_FONT" -pointsize "$PT" -fill black \
+                               -gravity southwest -draw "text ${OFF},${OFF} '${TIME}'" \
+                               -gravity southeast -draw "text ${OFF},${OFF} '${ATTR_TEXT}'" \
                                "$NEW_ATTRIBUTION"
       mv "$NEW_ATTRIBUTION" "$GENERATED"
       rm "$NEW_PADDED"
