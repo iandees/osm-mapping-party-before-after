@@ -123,6 +123,19 @@ def newest_data_timestamp(path: str) -> datetime | None:
     return _parse_iso(out) if out else None
 
 
+def oldest_data_timestamp(path: str) -> datetime | None:
+    """The oldest object timestamp contained in a history file, via osmium.
+
+    This is the earliest point for which the file has data; a requested start
+    date before it would render an empty "before" frame, so the job is rejected.
+    """
+    out = subprocess.run(
+        ["osmium", "fileinfo", "-e", "-g", "data.timestamp.first", path],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    return _parse_iso(out) if out else None
+
+
 def ensure_region_file(feature: dict, time_after: str, worker: "Worker") -> str:
     """Return a local path to the region's history file, using an S3 cache.
 
@@ -252,6 +265,15 @@ def main() -> int:
 
         worker.progress("Preparing map data…")
         history_file = ensure_region_file(feature, params["time_after"], worker)
+        # Reject a start date earlier than the region file's first data — the
+        # "before" frame would otherwise be empty. (Catch-up only adds recent
+        # data, so the base extract's first timestamp is authoritative.)
+        oldest = oldest_data_timestamp(history_file)
+        if oldest is not None and _parse_iso(params["time_before"]) < oldest:
+            raise RuntimeError(
+                f"start date {params['time_before']} predates available history "
+                f"(first data {oldest.isoformat()}); pick a later start date"
+            )
         # Bring the data up to the (possibly very recent / just-passed) after-time by
         # applying OSM replication diffs clipped to the bbox — the cached Geofabrik
         # extract lags ~a day, which would drop edits near the after-time.
