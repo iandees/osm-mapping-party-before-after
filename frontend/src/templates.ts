@@ -1,6 +1,7 @@
 import type { Job } from "./db";
 import { formatCostUsd, jobCostUsd } from "./cost";
 import {
+  DEFAULT_MAX_FUTURE_HORIZON_DAYS,
   FRAMES_MAX,
   FRAMES_MIN,
   MIN_START_DATE_LOCAL,
@@ -251,6 +252,7 @@ export function formPage(
   jobs: Job[] = [],
   others: Job[] = [],
   error?: string,
+  maxFutureHorizonDays: number = DEFAULT_MAX_FUTURE_HORIZON_DAYS,
 ): string {
   const head = `
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -285,6 +287,7 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
     <a href="#" data-preset="1mo">1 month</a>
     <a href="#" data-preset="6h">6 hours</a>
   </p>
+  <p class="muted" id="datehint">The "after" date may be up to ${maxFutureHorizonDays} day${maxFutureHorizonDays === 1 ? "" : "s"} in the future — we'll render that frame once the time arrives.</p>
 
   <label for="name">Name (optional)</label>
   <input id="name" name="name" type="text" maxlength="${NAME_MAX}"
@@ -320,6 +323,28 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
   map.addControl(drawControl);
   const ZOOM_MIN = ${ZOOM_MIN}, ZOOM_MAX = ${ZOOM_MAX};
   let current = null; // [left, bottom, right, top]
+
+  // Date-range bounds. The floor mirrors validation.ts MIN_START_DATE; the ceiling is
+  // "now + horizon days" (a future time_after is allowed for scheduled jobs, but only
+  // this far out). Both are enforced authoritatively server-side; these just guide the UI.
+  const beforeInput = document.getElementById('time_before');
+  const afterInput = document.getElementById('time_after');
+  const MIN_START_LOCAL = ${JSON.stringify(MIN_START_DATE_LOCAL)};
+  const MAX_FUTURE_HORIZON_DAYS = ${maxFutureHorizonDays};
+  function maxFutureLocal() {
+    return toLocalInput(new Date(Date.now() + MAX_FUTURE_HORIZON_DAYS * 86400 * 1000));
+  }
+  // Keep the two pickers mutually consistent: 'before' can't reach past 'after', and
+  // 'after' can't precede 'before'. Everything stays within [floor, now + horizon].
+  function updateDateBounds() {
+    const ceil = maxFutureLocal();
+    afterInput.max = ceil;
+    beforeInput.max = afterInput.value || ceil;
+    afterInput.min = beforeInput.value || MIN_START_LOCAL;
+  }
+  beforeInput.addEventListener('input', updateDateBounds);
+  afterInput.addEventListener('input', updateDateBounds);
+  updateDateBounds();
 
   // Mirror of validation.ts suggestedZoom(): the server recomputes authoritatively.
   function suggestedZoom(left, bottom, right, top, targetPx) {
@@ -406,6 +431,7 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
     apply();
     document.getElementById('time_before').value = toLocalInput(before);
     document.getElementById('time_after').value = toLocalInput(after);
+    updateDateBounds();
   }
   window.applyRange = applyRange;
 
@@ -425,6 +451,12 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
     if (!document.getElementById('bbox').value) {
       e.preventDefault();
       alert('Please draw a rectangle on the map first.');
+      return;
+    }
+    // min/max are inclusive, so they don't catch before === after (or a stale inversion).
+    if (beforeInput.value && afterInput.value && beforeInput.value >= afterInput.value) {
+      e.preventDefault();
+      alert('The "before" date must be earlier than the "after" date.');
     }
   });
 </script>

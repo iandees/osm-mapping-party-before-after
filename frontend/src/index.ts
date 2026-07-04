@@ -50,7 +50,8 @@ app.get("/", async (c) => {
     getJobsByEmail(c.env.DB, session.email, 12),
     getRecentDoneJobsExcludingEmail(c.env.DB, session.email, 12),
   ]);
-  return c.html(formPage(session.email, mine, others));
+  const horizon = Number(c.env.MAX_FUTURE_HORIZON_DAYS) || DEFAULT_MAX_FUTURE_HORIZON_DAYS;
+  return c.html(formPage(session.email, mine, others, undefined, horizon));
 });
 
 // ---- Magic-link login -------------------------------------------------
@@ -102,12 +103,12 @@ app.post("/submit", requireSession(), async (c) => {
   const now = Math.floor(Date.now() / 1000);
   const horizon = Number(c.env.MAX_FUTURE_HORIZON_DAYS) || DEFAULT_MAX_FUTURE_HORIZON_DAYS;
   const result = validateJobInput(form as Record<string, unknown>, maxArea, now, horizon);
-  if (!result.ok) return c.html(formPage(email, mine, others, result.errors.join("; ")), 400);
+  if (!result.ok) return c.html(formPage(email, mine, others, result.errors.join("; "), horizon), 400);
 
   const cap = Number(c.env.MAX_ACTIVE_JOBS_PER_EMAIL) || 3;
   if ((await countActiveJobsByEmail(c.env.DB, email)) >= cap) {
     return c.html(
-      formPage(email, mine, others, `You already have ${cap} jobs in progress. Please wait for them to finish.`),
+      formPage(email, mine, others, `You already have ${cap} jobs in progress. Please wait for them to finish.`, horizon),
       429,
     );
   }
@@ -130,7 +131,7 @@ app.post("/submit", requireSession(), async (c) => {
   } catch (e) {
     console.error("enqueue failed", e);
     await markJobFailed(c.env.DB, job.id, "Could not queue the render. Please try again.");
-    return c.html(formPage(email, mine, others, "Could not queue the render. Please try again."), 502);
+    return c.html(formPage(email, mine, others, "Could not queue the render. Please try again.", horizon), 502);
   }
   return c.redirect(`/jobs/${job.id}`, 302);
 });
