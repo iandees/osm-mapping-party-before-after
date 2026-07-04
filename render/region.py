@@ -128,3 +128,15 @@ def region_history_url(feature: dict) -> str:
     if not history:
         raise ValueError(f"region {region_id(feature)} has no history URL in the index")
     return history
+
+
+def region_updates_url(feature: dict) -> str | None:
+    """The region's per-region daily update stream URL (index's urls.updates), or None.
+
+    Geofabrik publishes a public, region-scoped daily replication stream at
+    ``<region>-updates/`` for most regions. Catch-up pulls these small region-sized
+    diffs before falling back to the global planet stream. Missing for a few regions,
+    in which case catch-up uses the global stream alone.
+    """
+    urls = (feature.get("properties") or {}).get("urls") or {}
+    return urls.get("updates")

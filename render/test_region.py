@@ -6,6 +6,7 @@ from region import (
     NoCoveringRegion,
     geometry_bbox,
     region_history_url,
+    region_updates_url,
     select_region,
 )
 
@@ -107,6 +108,14 @@ class TestSelectRegion(unittest.TestCase):
         feature = {"properties": {"id": "x", "urls": {}}}
         with self.assertRaises(ValueError):
             region_history_url(feature)
+
+    def test_updates_url(self):
+        feature = {"properties": {"urls": {"updates": "https://download.geofabrik.de/x-updates"}}}
+        self.assertEqual(region_updates_url(feature), "https://download.geofabrik.de/x-updates")
+
+    def test_updates_url_missing_returns_none(self):
+        # A region without a Geofabrik update stream → catch-up uses the global stream.
+        self.assertIsNone(region_updates_url({"properties": {"urls": {}}}))
 
 
 if __name__ == "__main__":

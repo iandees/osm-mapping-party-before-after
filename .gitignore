@@ -4,3 +4,7 @@
 *.gif
 node_modules/
 sample.png
+
+# Python bytecode
+__pycache__/
+*.pyc
