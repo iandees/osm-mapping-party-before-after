@@ -190,6 +190,7 @@ app.get("/internal/jobs/:id", async (c) => {
     zoom: job.zoom,
     output_px: job.output_px,
     num_frames: job.num_frames,
+    scale_bar: !!job.scale_bar,
   });
 });
 

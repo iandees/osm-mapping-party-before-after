@@ -304,6 +304,12 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
       <label for="num_frames">Frames</label>
       <input id="num_frames" name="num_frames" type="number" min="${FRAMES_MIN}" max="${FRAMES_MAX}" value="2" required>
     </div>
+    <div>
+      <label for="scale_bar">
+        <input id="scale_bar" name="scale_bar" type="checkbox" checked>
+        Show scale bar
+      </label>
+    </div>
   </div>
 
   <p class="muted" id="publicnote">📢 Every map you make is <strong>public</strong> — once it's done it appears in the gallery below and on the sign-in page, where anyone can see it. We do not display your email.</p>

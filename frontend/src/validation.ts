@@ -80,6 +80,7 @@ export interface JobInput {
   zoom: number; // derived from bbox + output_px
   output_px: number; // longest side of the delivered GIF
   num_frames: number;
+  scale_bar: boolean;
 }
 
 /** Trim and cap an optional name; empty/whitespace/non-string → null. Never errors. */
@@ -178,6 +179,12 @@ export function validateJobInput(
     errors.push(`num_frames must be an integer in [${FRAMES_MIN}, ${FRAMES_MAX}]`);
   }
 
+  // ---- scale bar ----
+  // Standard HTML checkbox semantics: present with value "on" when checked,
+  // entirely absent from the form body when unchecked. No error path — any
+  // other value is simply treated as unchecked.
+  const scaleBar = form.scale_bar === "on";
+
   if (errors.length > 0 || !coords) return { ok: false, errors };
 
   const [l, b, r, t] = coords;
@@ -191,6 +198,7 @@ export function validateJobInput(
       zoom: suggestedZoom(l, b, r, t, size!),
       output_px: size!,
       num_frames: frames!,
+      scale_bar: scaleBar,
     },
   };
 }

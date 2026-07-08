@@ -30,6 +30,7 @@ const sampleJob: NewJob = {
   zoom: 13,
   output_px: 800,
   num_frames: 2,
+  scale_bar: false,
 };
 
 beforeEach(async () => {
@@ -61,6 +62,14 @@ describe("job lifecycle", () => {
     expect(job.status).toBe("queued");
     expect(job.created_at).toBe(1000);
     expect(await getJob(DB, job.id)).toMatchObject({ id: job.id, status: "queued" });
+  });
+
+  it("persists the scale_bar flag", async () => {
+    const withBar = await createJob(DB, { ...sampleJob, scale_bar: true }, 1000);
+    expect(!!withBar.scale_bar).toBe(true);
+
+    const withoutBar = await createJob(DB, { ...sampleJob, scale_bar: false }, 1000);
+    expect(!!withoutBar.scale_bar).toBe(false);
   });
 
   it("transitions queued -> running -> done", async () => {

@@ -3,12 +3,13 @@ set -o errexit -o nounset -o pipefail
 
 if [ $# -ge 1 ] && [ "$1" = "-h" ] ; then
 	cat <<-END
-	Usage: $0 INPUT.osh.pbf BEFORETIME AFTERTIME BBOX [MIN_ZOOM] [MAX_ZOOM] [NUM_FRAMES]
+	Usage: $0 INPUT.osh.pbf BEFORETIME AFTERTIME BBOX [MIN_ZOOM] [MAX_ZOOM] [NUM_FRAMES] [SCALE_BAR]
 
 	BEFORETIME & AFTERTIME are ISO-8601 timestamps
 	BBOX is a comma-separated long/lat bounding box (left,bottom,right,top) and can be found via http://bboxfinder.com/
 	MIN_ZOOM and MAX_ZOOM are optional zoom levels (default: 6 and 12)
 	NUM_FRAMES is the number of frames to generate for the GIF (default: 2)
+	SCALE_BAR is 1 to draw a scale bar in the lower-left of each frame, 0 to omit it (default: 0)
 	END
 	exit 0
 fi
@@ -22,6 +23,7 @@ BBOX_SPACE="${BBOX//,/ }"
 MIN_ZOOM=${5:-6}
 MAX_ZOOM=${6:-12}
 NUM_FRAMES=${7:-2}
+SCALE_BAR=${8:-0}
 
 # for planet-latest.osm.obf we calculate the "planet" part
 PREFIX=$(basename "$INPUT_FILE")
@@ -183,6 +185,60 @@ for TIME in $TIMESTAMPS; do
       # (34px band / 7px inset at the base size of 20).
       BAND=$(( PT * 34 / BASE_PT ))
       OFF=$(( PT * 7 / BASE_PT ))
+      # Optional scale bar (GitHub issue #23): a small ruler + "N km"/"N m" label
+      # drawn directly onto the map (no backing box), sized smaller than the
+      # timestamp/attribution text so it reads as a secondary annotation. Placed
+      # in the map's own bottom-left corner — above the band added below, so it
+      # never collides with the timestamp.
+      if [ "$SCALE_BAR" = "1" ] ; then
+        SCALE_PT=$(( PT * 65 / 100 ))
+        [ "$SCALE_PT" -lt 8 ] && SCALE_PT=8
+        read -r BAR_PX SCALE_LABEL <<PYOUT
+$(python3 - <<PYEOF
+import math
+left, bottom, right, top = map(float, "$BBOX_SPACE".split())
+zoom = $ZOOM
+img_w = $IMG_W
+lat = (bottom + top) / 2.0
+mpp = 156543.03392804097 * math.cos(math.radians(lat)) / (2 ** zoom)
+max_bar_px = min(img_w * 0.2, 110)
+candidates = sorted(set(s * (10 ** exp) for exp in range(-1, 7) for s in (1, 2, 5) if s * (10 ** exp) >= 1))
+target_m = max_bar_px * mpp
+chosen = candidates[0]
+for c in candidates:
+    if c <= target_m:
+        chosen = c
+    else:
+        break
+bar_px = max(1, round(chosen / mpp))
+if chosen >= 1000:
+    label = f"{chosen / 1000:g} km"
+else:
+    label = f"{chosen:g} m"
+print(f"{bar_px} {label}")
+PYEOF
+)
+PYOUT
+        # Too small to be legible (degenerate sub-~150px-wide frame) — skip.
+        if [ "$BAR_PX" -ge 20 ] ; then
+          TICK_H=$(( SCALE_PT * 45 / 100 ))
+          TICK_L=$OFF
+          TICK_R=$(( OFF + BAR_PX ))
+          TICK_BOTTOM=$(( IMG_H - OFF ))
+          TICK_TOP=$(( TICK_BOTTOM - TICK_H ))
+          LINE_Y=$(( (TICK_TOP + TICK_BOTTOM) / 2 ))
+          LABEL_X=$(( OFF + BAR_PX + OFF ))
+          SCALE_BAR_OUT="$(mktemp tmp.XXXXXX.scalebar.png)"
+          gm convert "$GENERATED" \
+                     -fill black -draw "line ${TICK_L},${LINE_Y} ${TICK_R},${LINE_Y}" \
+                     -draw "line ${TICK_L},${TICK_TOP} ${TICK_L},${TICK_BOTTOM}" \
+                     -draw "line ${TICK_R},${TICK_TOP} ${TICK_R},${TICK_BOTTOM}" \
+                     -font "$OVERLAY_FONT" -pointsize "$SCALE_PT" \
+                     -gravity southwest -draw "text ${LABEL_X},${OFF} '${SCALE_LABEL}'" \
+                     "$SCALE_BAR_OUT"
+          mv "$SCALE_BAR_OUT" "$GENERATED"
+        fi
+      fi
       # GraphicsMagick has no -splice and its bare `-extent -0-30` is a no-op here
       # (it silently leaves the canvas unchanged), so compute the target size and
       # extend the canvas explicitly with north gravity to keep the map flush top.

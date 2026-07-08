@@ -35,6 +35,14 @@ describe("validateJobInput", () => {
     }
   });
 
+  it("parses the scale_bar checkbox (HTML checkbox semantics: 'on' or absent)", () => {
+    const checked = validateJobInput({ ...valid, scale_bar: "on" }, MAX_AREA);
+    expect(checked.ok && checked.value.scale_bar).toBe(true);
+
+    const unchecked = validateJobInput(valid, MAX_AREA); // field absent when unchecked
+    expect(unchecked.ok && unchecked.value.scale_bar).toBe(false);
+  });
+
   it("treats name as optional: trims, caps, and nulls empties", () => {
     const absent = validateJobInput(valid, MAX_AREA);
     expect(absent.ok && absent.value.name).toBeNull();

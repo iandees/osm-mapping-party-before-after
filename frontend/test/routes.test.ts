@@ -21,6 +21,7 @@ async function doneJob(email: string) {
     zoom: 12,
     output_px: 400,
     num_frames: 2,
+    scale_bar: false,
   });
   await markJobRunning(env.DB, job.id);
   await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`);
@@ -87,6 +88,7 @@ describe("home", () => {
       zoom: 12,
       output_px: 400,
       num_frames: 2,
+      scale_bar: false,
     });
     await markJobRunning(env.DB, job.id);
     await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`);
@@ -106,6 +108,7 @@ describe("home", () => {
       zoom: 12,
       output_px: 400,
       num_frames: 2,
+      scale_bar: false,
     });
     await markJobRunning(env.DB, job.id, 1000);
     await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, 1000 + 3600); // ran one hour
@@ -125,6 +128,7 @@ describe("home", () => {
       zoom: 12,
       output_px: 400,
       num_frames: 2,
+      scale_bar: false,
     });
     await markJobRunning(env.DB, job.id);
     await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`);
@@ -153,6 +157,7 @@ describe("home", () => {
       zoom: 12,
       output_px: 400,
       num_frames: 2,
+      scale_bar: false,
     });
     await markJobRunning(env.DB, mine.id);
     // Someone else's finished job.
@@ -297,6 +302,7 @@ describe("verify + submit", () => {
       zoom: 12,
       output_px: 400,
       num_frames: 2,
+      scale_bar: false,
     });
     await markJobRunning(env.DB, job.id);
 
@@ -315,6 +321,7 @@ describe("scheduled submissions", () => {
     zoom: 12,
     output_px: 400,
     num_frames: 2,
+    scale_bar: false,
   };
 
   it("defers a future-end-time submission instead of enqueuing it", async () => {
@@ -524,5 +531,37 @@ describe("internal callbacks", () => {
     expect(job?.status).toBe("done");
     expect(job?.result_key).toBe(`jobs/${id}/`);
     expect(emailSend).toHaveBeenCalledOnce();
+  });
+});
+
+describe("internal job params", () => {
+  it("includes the scale_bar flag in the params payload", async () => {
+    const { env: e } = testEnv();
+    const job = await createJob(
+      env.DB,
+      {
+        email: "someone@example.com",
+        bbox: "-0.2,51.4,0,51.6",
+        time_before: "2020-01-01T00:00:00Z",
+        time_after: "2024-01-01T00:00:00Z",
+        zoom: 12,
+        output_px: 400,
+        num_frames: 2,
+        scale_bar: true,
+      },
+      undefined,
+      null,
+    );
+
+    const res = await app.request(
+      new Request(`https://app.example.com/internal/jobs/${job.id}`, {
+        headers: { "x-callback-secret": "callback-secret" },
+      }),
+      {},
+      e,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { scale_bar: boolean };
+    expect(body.scale_bar).toBe(true);
   });
 });
