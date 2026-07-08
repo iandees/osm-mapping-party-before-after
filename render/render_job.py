@@ -185,6 +185,7 @@ def run_make(history_file: str, params: dict, worker: "Worker") -> None:
     # parsing its per-frame log lines.
     zoom = str(params["zoom"])
     n = int(params["num_frames"])
+    scale_bar = "1" if params.get("scale_bar") else "0"
     proc = subprocess.Popen(
         [
             os.path.join(ROOT, "make.sh"),
@@ -195,6 +196,7 @@ def run_make(history_file: str, params: dict, worker: "Worker") -> None:
             zoom,
             zoom,
             str(n),
+            scale_bar,
         ],
         cwd=ROOT,
         stdout=subprocess.PIPE,
