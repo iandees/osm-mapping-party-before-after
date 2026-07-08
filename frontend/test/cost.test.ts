@@ -12,6 +12,7 @@ const baseJob: Job = {
   zoom: 13,
   output_px: 800,
   num_frames: 2,
+  scale_bar: false,
   status: "done",
   error: null,
   progress: null,
