@@ -86,6 +86,28 @@ page.setDefaultTimeout(120_000);
 page.on("console", (msg) => console.log("[page]", msg.text()));
 page.on("pageerror", (err) => console.error("[pageerror]", err));
 
+// MapLibre's "idle" event (awaited below, inside renderAmericanaFrame) fires
+// once the map has settled — even if every tile/sprite/glyph request 404ed
+// or otherwise failed, producing a blank map that looks like a normal,
+// successful render. Track request failures ourselves so a total
+// tile-source outage is a loud CI failure instead of a silently-shipped
+// blank frame. This covers both network-level failures (DNS, aborted,
+// refused — reported via the "requestfailed" event) and HTTP-level failures
+// (404s, 5xxs — reported via a non-ok "response", since those complete
+// successfully as far as the network stack is concerned).
+let failedRequestCount = 0;
+const FAILED_REQUEST_THRESHOLD = 5; // more than a small handful is not normal for a healthy render
+page.on("requestfailed", (req) => {
+  failedRequestCount++;
+  console.warn(`[requestfailed] ${req.url()} ${req.failure()?.errorText ?? ""}`);
+});
+page.on("response", (res) => {
+  if (!res.ok()) {
+    failedRequestCount++;
+    console.warn(`[response] ${res.status()} ${res.url()}`);
+  }
+});
+
 await page.goto(`http://localhost:${PORT}/page.html`, { waitUntil: "load" });
 await page.evaluate(
   (c, z, url) => window.renderAmericanaFrame(c, z, url),
@@ -97,6 +119,15 @@ await page.evaluate(
 const mapEl = await page.$("#map");
 await mapEl.screenshot({ path: outfile });
 console.log(`wrote ${outfile}`);
+console.log(`${failedRequestCount} requests failed during render`);
 
 await browser.close();
 server.close();
+
+if (failedRequestCount > FAILED_REQUEST_THRESHOLD) {
+  console.error(
+    `ERROR: ${failedRequestCount} requests failed during render (threshold ${FAILED_REQUEST_THRESHOLD}) — ` +
+      "this likely means a tile/style/sprite source outage produced a blank map rather than a real render",
+  );
+  process.exit(1);
+}
