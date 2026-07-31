@@ -1,3 +1,17 @@
+# ---- Americana: pre-generate OpenMapTiles build artifacts from a pinned
+# commit (the one validated end-to-end in the feasibility spike). Only the
+# generated output is copied into the final image, not this whole stage.
+FROM openmaptiles/openmaptiles-tools:7.2 AS openmaptiles_build
+ARG OPENMAPTILES_COMMIT=6c11838d38030148832c039c2ea367274db86a87
+RUN git clone https://github.com/openmaptiles/openmaptiles.git /omt \
+ && cd /omt && git checkout "$OPENMAPTILES_COMMIT"
+WORKDIR /omt
+RUN mkdir -p /build/sql \
+ && generate-imposm3 openmaptiles.yaml > /build/mapping.yaml \
+ && generate-sql openmaptiles.yaml --dir /build/sql \
+ && generate-sqltomvt openmaptiles.yaml --key --postgis-ver 3.3.4 \
+      --function --fname=getmvt >> /build/sql/run_last.sql
+
 FROM postgis/postgis:18-3.6 AS development_build
 
 RUN apt-get update --quiet \
@@ -25,7 +39,6 @@ RUN apt-get update --quiet \
  libprotozero-dev \
  lua5.3 \
  mapnik-utils \
- npm \
  osm2pgsql \
  osmctools \
  osmium-tool \
@@ -37,6 +50,33 @@ RUN apt-get update --quiet \
  python3-pip \
  sudo \
  vim \
+&& apt-get clean autoclean \
+&& apt-get autoremove --yes \
+&& rm -rf /var/lib/{apt,dpkg,cache,log}/
+
+# ---- Americana toolchain: imposm3 (raw-OSM import) + martin (tile server) ----
+COPY --from=openmaptiles_build /usr/local/bin/imposm /usr/local/bin/imposm
+COPY --from=ghcr.io/maplibre/martin:1.13.0 /usr/local/bin/martin /usr/local/bin/martin
+
+# Node.js 22 (Debian's bundled nodejs is older than what maplibre-gl/Puppeteer
+# need — matches the version validated in the feasibility spike) + the system
+# libraries Puppeteer's bundled Chromium needs to launch headless
+# (https://pptr.dev/troubleshooting#chrome-doesnt-launch-on-linux — verify
+# this exact package list against this image's Debian release; some lib
+# names change between Debian releases, e.g. the libasound2/libasound2t64
+# split, so `apt-get install` failures here are a naming issue to fix, not a
+# sign the approach is wrong). Also pulls in the runtime shared libraries
+# the imposm3 and martin binaries (copied in above from other images) need
+# but that this postgis-based image doesn't otherwise install:
+# libleveldb1d (imposm3) and libuv1t64 (martin — trixie's libuv1 is named
+# with the "t64" 64-bit-time_t suffix, there is no plain "libuv1" package).
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+&& apt-get install --quiet -y --no-install-recommends nodejs \
+&& apt-get install --quiet -y --no-install-recommends \
+ ca-certificates fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 \
+ libcairo2 libcups2 libdbus-1-3 libexpat1 libgbm1 libglib2.0-0 libgtk-3-0 \
+ libleveldb1d libnspr4 libnss3 libpango-1.0-0 libuv1t64 libx11-6 \
+ libxcomposite1 libxdamage1 libxext6 libxfixes3 libxrandr2 libxss1 xdg-utils \
 && apt-get clean autoclean \
 && apt-get autoremove --yes \
 && rm -rf /var/lib/{apt,dpkg,cache,log}/
@@ -57,6 +97,12 @@ ENV HOME=/home/postgres
 
 # Make sure the contents of our repo are in ${HOME}
 COPY . ${HOME}
+
+COPY --from=openmaptiles_build /build ${HOME}/render/americana/openmaptiles-build
+
+ENV PUPPETEER_CACHE_DIR=${HOME}/.cache/puppeteer
+RUN cd ${HOME}/render/americana && npm ci && npm run build
+
 RUN usermod -u 1000 postgres
 RUN chown -R 1000 ${HOME}
 USER postgres
