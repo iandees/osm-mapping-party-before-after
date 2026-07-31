@@ -106,4 +106,7 @@ jobs:
                 "-87.631,41.879,-87.627,41.881" 15 15 2 0 americana
               ls -la /home/postgres/progress.*.z15.gif
               test -s /home/postgres/progress.*.z15.gif
+              ls -la /home/postgres/fixture.*.z15.png
+              test "$(md5sum /home/postgres/fixture.*2019-06-01T00:00:00Z*.z15.png | cut -d" " -f1)" \
+                != "$(md5sum /home/postgres/fixture.*2019-06-02T00:00:00Z*.z15.png | cut -d" " -f1)"
             '
