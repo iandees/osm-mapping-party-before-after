@@ -20,6 +20,7 @@ export interface Job {
   output_px: number;
   num_frames: number;
   scale_bar: boolean;
+  style: string;
   status: JobStatus;
   error: string | null;
   progress: string | null;
@@ -42,6 +43,7 @@ export interface NewJob {
   output_px: number;
   num_frames: number;
   scale_bar: boolean;
+  style: string;
 }
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
@@ -103,8 +105,8 @@ export async function createJob(
   await db
     .prepare(
       `INSERT INTO jobs
-        (id, email, name, bbox, time_before, time_after, zoom, output_px, num_frames, scale_bar, status, created_at, scheduled_for, queued_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, email, name, bbox, time_before, time_after, zoom, output_px, num_frames, scale_bar, style, status, created_at, scheduled_for, queued_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       id,
@@ -117,6 +119,7 @@ export async function createJob(
       job.output_px,
       job.num_frames,
       job.scale_bar ? 1 : 0,
+      job.style,
       status,
       now,
       scheduled ? scheduledFor : null,

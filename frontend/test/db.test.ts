@@ -31,6 +31,7 @@ const sampleJob: NewJob = {
   output_px: 800,
   num_frames: 2,
   scale_bar: false,
+  style: "carto",
 };
 
 beforeEach(async () => {

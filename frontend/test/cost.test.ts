@@ -13,6 +13,7 @@ const baseJob: Job = {
   output_px: 800,
   num_frames: 2,
   scale_bar: false,
+  style: "carto",
   status: "done",
   error: null,
   progress: null,

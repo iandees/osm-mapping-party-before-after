@@ -186,6 +186,7 @@ def run_make(history_file: str, params: dict, worker: "Worker") -> None:
     zoom = str(params["zoom"])
     n = int(params["num_frames"])
     scale_bar = "1" if params.get("scale_bar") else "0"
+    style = params.get("style") or "carto"
     proc = subprocess.Popen(
         [
             os.path.join(ROOT, "make.sh"),
@@ -197,6 +198,7 @@ def run_make(history_file: str, params: dict, worker: "Worker") -> None:
             zoom,
             str(n),
             scale_bar,
+            style,
         ],
         cwd=ROOT,
         stdout=subprocess.PIPE,
