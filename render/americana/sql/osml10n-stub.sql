@@ -6,8 +6,10 @@
 -- zzz_language.sql and the transportation-name layer SQL, both of which call
 -- osml10n_* functions without defining them: the real extension is a compiled
 -- C extension that openmaptiles's own reference Postgres image
--- (openmaptiles/postgis, PG14) bundles, but this project's image is
--- postgis/postgis:18-3.6 (PG14 vs PG18) and does not have it built/installed.
+-- (openmaptiles/postgis, PG14) bundles, but this project's image runs
+-- PostgreSQL 16 (see the Dockerfile for why: PG17+ restricts materialized
+-- view search_path in a way that breaks the vendored OpenMapTiles SQL) and
+-- does not have osml10n built/installed for it.
 --
 -- Loaded (by make.sh, frame 0 of the Americana import path) before
 -- sql-tools/*.sql so those files' own definitions succeed. These are
@@ -25,7 +27,7 @@
 -- Both are purely label-cosmetic degradations, not functional blockers.
 -- Revisit if Americana's shipped labels need real transliteration/abbreviation
 -- parity with upstream OpenMapTiles (would mean building the osml10n extension
--- for PG18, or switching this image to a Postgres version it already targets).
+-- for PG16, or switching this image to a Postgres version it already targets).
 
 CREATE OR REPLACE FUNCTION osml10n_get_name_without_brackets_from_tags(tags hstore, lang text, geom geometry)
 RETURNS text AS $$

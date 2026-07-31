@@ -148,7 +148,7 @@ PYOUT
       "$ROOT/render/americana/openmaptiles-build/lake_centerline.geojson"
     # The building layer's aggregation function also needs a static
     # "country_osm_grid" table (see the Dockerfile for what/why) — a plain
-    # pg_dump SQL file, loaded directly. Left unclipped: at ~87MB uncommpressed
+    # pg_dump SQL file, loaded directly. Left unclipped: at ~87MB uncompressed
     # of coarse per-country polygons (vs. water_polygons/lake_centerline's
     # hundreds of MB of fine detail), a full load costs seconds not minutes,
     # and building.sql's own use of it already bounds work per grid cell via
@@ -199,9 +199,24 @@ OSM2PGSQL_ARGS=(--output flex --style openstreetmap-carto-flex.lua -d gis)
 
 # Americana: imposm3 import target + a martin instance serving it, running
 # for the rest of this job (not restarted per-frame — schema/function setup
-# happens once after frame 0; martin re-queries live data on every request,
-# so it stays valid as later frames' `imposm diff` mutates the same tables).
-# Never a persistent service beyond this job's lifetime.
+# happens once after frame 0). Never a persistent service beyond this job's
+# lifetime.
+#
+# martin queries plain tables live on every request, so those layers stay
+# valid as later frames' `imposm diff` mutates the same tables — but several
+# OpenMapTiles layers (verified: 75 materialized views in the public schema
+# after frame 0's SQL corpus, e.g. the zoom-generalized "_gen_zN" views most
+# of this script's default MIN_ZOOM..MAX_ZOOM range of 6..12 falls within)
+# are materialized views: a point-in-time snapshot taken once when frame 0's
+# run_first.sql/parallel/*.sql/run_last.sql created them, NOT re-evaluated on
+# read. Without an explicit refresh, every frame after the first would render
+# those layers identically to frame 0 regardless of what `imposm diff` just
+# changed — a silent, total failure of the actual before/after feature for
+# any layer backed by a matview. See the `refresh_matviews` call below (after
+# every `imposm diff`) for the fix; verified directly against a scratch
+# materialized view and one real OpenMapTiles matview (osm_poi_stop_centroid)
+# that plain `REFRESH MATERIALIZED VIEW` does NOT happen automatically on the
+# underlying table changing, and does correctly pick up the change once run.
 IMPOSM_CACHE_DIR="$ROOT/.imposm-cache"
 # Verified at implementation time: imposm3 and martin need DIFFERENT
 # connection-string schemes for the same "gis" database — imposm3 (a
@@ -219,12 +234,30 @@ MARTIN_PID=""
 start_martin_if_needed() {
   if [ -z "$MARTIN_PID" ] ; then
     echo "Starting martin..."
-    martin --listen-addresses 127.0.0.1:3000 "$MARTIN_CONNECTION" &
+    # --cache-size 0 disables martin's own tile cache (default 256MB, per
+    # `martin --help`/its own startup log line "Initializing tile cache with
+    # maximum size 256 MB"). There's no legitimate reuse to cache in this
+    # per-job, per-frame-changing workload — every frame's `imposm diff`
+    # mutates the same tables martin serves from, so a cached tile from frame
+    # N would otherwise keep being served for frame N+1's identical-looking
+    # request (same z/x/y), compounding the matview-staleness risk above with
+    # a second, independent staleness source.
+    martin --cache-size 0 --listen-addresses 127.0.0.1:3000 "$MARTIN_CONNECTION" &
     MARTIN_PID=$!
+    MARTIN_READY=0
     for _ in $(seq 1 30) ; do
-      curl -sf http://127.0.0.1:3000/catalog > /dev/null 2>&1 && break
+      if curl -sf http://127.0.0.1:3000/catalog > /dev/null 2>&1 ; then
+        MARTIN_READY=1
+        break
+      fi
       sleep 1
     done
+    # Not swallowed: a martin that never comes up (e.g. the connection-string
+    # scheme mismatch found during implementation — see IMPOSM_CONNECTION vs
+    # MARTIN_CONNECTION above) previously left capture.mjs fetching tiles from
+    # a dead server, hanging until Puppeteer's own timeout and looking exactly
+    # like a Puppeteer bug rather than a martin startup failure.
+    [ "$MARTIN_READY" = 1 ] || { echo "martin failed to become ready" >&2 ; exit 1 ; }
   fi
 }
 stop_martin() {
@@ -235,6 +268,38 @@ stop_martin() {
   fi
 }
 trap stop_martin EXIT
+
+# Materialized views created by frame 0's SQL corpus (run_first.sql,
+# parallel/*.sql, run_last.sql) are a point-in-time snapshot, not re-evaluated
+# on read — every later frame's `imposm diff` mutates the underlying tables
+# but leaves any matview stale until explicitly refreshed. Two passes: the
+# first refresh can fail for a matview whose own source is another matview
+# that hasn't been refreshed yet in this pass (dependency ordering isn't
+# known ahead of time across the ~75 matviews this schema creates); the
+# second pass, run after every matview has had one refresh attempt, picks up
+# whatever the first pass's ordering missed. ON_ERROR_STOP=0 on the outer
+# psql invocation is intentional here — the inner EXCEPTION WHEN OTHERS
+# already handles per-view failures (an expected, transient ordering issue on
+# pass 1), so the outer command must not abort the whole script over it.
+refresh_matviews() {
+  for pass in 1 2 ; do
+    psql -d gis -v ON_ERROR_STOP=0 -c "
+      DO \$\$
+      DECLARE r RECORD;
+      BEGIN
+        FOR r IN SELECT matviewname FROM pg_matviews WHERE schemaname = 'public' LOOP
+          BEGIN
+            EXECUTE format('REFRESH MATERIALIZED VIEW %I', r.matviewname);
+          EXCEPTION WHEN OTHERS THEN
+            -- dependency not ready yet this pass; the second pass (or this
+            -- same pass's later iterations) picks it up.
+            NULL;
+          END;
+        END LOOP;
+      END \$\$;
+    "
+  done
+}
 
 # Process each timestamp. Frame 0 is a full slim create; later frames apply only
 # the OsmChange delta from the previous frame's snapshot (osmium derive-changes),
@@ -288,6 +353,7 @@ for TIME in $TIMESTAMPS; do
       gzip -c "$DELTA" > "$DELTA.gz"
       imposm diff -mapping "$MAPPING" \
         -cachedir "$IMPOSM_CACHE_DIR" -connection "$IMPOSM_CONNECTION" "$DELTA.gz"
+      refresh_matviews
       rm -f "$DELTA" "$DELTA.gz" "$PREV_SNAP"
     fi
   else
@@ -307,7 +373,6 @@ for TIME in $TIMESTAMPS; do
   PREV_SNAP="$SNAP"
   FRAME_IDX=$((FRAME_IDX + 1))
 
-  cd "$ROOT"
   for ZOOM in $(seq "$MIN_ZOOM" "$MAX_ZOOM") ; do
     if [ "$ROOT/.$PREFIX.$TIME.$BBOX_COMMA.generated" -nt "$PREFIX.$TIME.$BBOX_COMMA.z${ZOOM}.png" ] ; then
       echo "Generating zoom ${ZOOM} at time ${TIME}"

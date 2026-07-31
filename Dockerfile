@@ -9,6 +9,30 @@
 # "import-data" image (pinned to the same 7.2 version as openmaptiles-tools
 # and openmaptiles_build below) via ogr2ogr at Postgres-import time (see
 # make.sh); only the raw files themselves are copied out here.
+# The OpenMapTiles building layer's aggregation function (update_building.sql,
+# from the pinned commit below) also hard-requires a "country_osm_grid" table
+# — per-country grid polygons used to bound the ST_ClusterDBSCAN aggregation
+# to a manageable area (openmaptiles/openmaptiles#1044). Unlike Natural Earth,
+# openmaptiles-tools has no bundled copy or generator for this table; it's a
+# long-standing static community artifact (originally circulated for
+# imposm/osm2pgsql building-aggregation setups) mirrored in the OSMNames
+# project. Pinned to a specific commit (not `master`, the only unpinned
+# dependency in this whole chain otherwise) with a checksum verified against
+# what was actually fetched at pin time — the file hasn't changed since 2019,
+# but there's no other integrity guarantee on a raw GitHub URL. This is its
+# own build stage (rather than a RUN in the final stage, where it lived
+# before) specifically so this ~87MB download's Docker layer cache doesn't
+# get invalidated by every source-tree change further down (that layer sat
+# after `COPY . ${HOME}`, forcing a re-download on every rebuild regardless
+# of whether this file's own dependencies changed).
+FROM curlimages/curl:latest AS country_grid_build
+ARG COUNTRY_OSM_GRID_COMMIT=ccede88ad1fee7528467e669889c0e539566d86f
+ARG COUNTRY_OSM_GRID_SHA256=5291fc51b4dd2abb00aed97a51d33eec9ee6584c45d3903c12c8abf6228d828a
+RUN curl -fsSL -o /tmp/country_osm_grid.sql \
+      "https://raw.githubusercontent.com/OSMNames/OSMNames/${COUNTRY_OSM_GRID_COMMIT}/data/sql/country_osm_grid.sql" \
+ && echo "${COUNTRY_OSM_GRID_SHA256}  /tmp/country_osm_grid.sql" | sha256sum -c - \
+ && gzip -9 /tmp/country_osm_grid.sql
+
 FROM openmaptiles/import-data:7.2 AS reference_data_build
 
 FROM openmaptiles/openmaptiles-tools:7.2 AS openmaptiles_build
@@ -151,21 +175,7 @@ COPY --from=openmaptiles_build /build ${HOME}/render/americana/openmaptiles-buil
 COPY --from=reference_data_build /import/natural_earth/natural_earth_vector.sqlite ${HOME}/render/americana/openmaptiles-build/natural_earth_vector.sqlite
 COPY --from=reference_data_build /import/water_polygons/ ${HOME}/render/americana/openmaptiles-build/water_polygons/
 COPY --from=reference_data_build /import/lake_centerline/lake_centerline.geojson ${HOME}/render/americana/openmaptiles-build/lake_centerline.geojson
-
-# The OpenMapTiles building layer's aggregation function (update_building.sql,
-# from the pinned commit above) also hard-requires a "country_osm_grid" table
-# — per-country grid polygons used to bound the ST_ClusterDBSCAN aggregation
-# to a manageable area (openmaptiles/openmaptiles#1044). Unlike Natural Earth,
-# openmaptiles-tools has no bundled copy or generator for this table; it's a
-# long-standing static community artifact (originally circulated for
-# imposm/osm2pgsql building-aggregation setups) mirrored in the OSMNames
-# project. Baked into the image at build time, gzipped, and loaded once by
-# make.sh the same way as Natural Earth (frame 0, STYLE=americana only).
-RUN wget --quiet -O /tmp/country_osm_grid.sql \
-      https://raw.githubusercontent.com/OSMNames/OSMNames/master/data/sql/country_osm_grid.sql \
- && gzip -9 /tmp/country_osm_grid.sql \
- && mkdir -p ${HOME}/render/americana/openmaptiles-build \
- && mv /tmp/country_osm_grid.sql.gz ${HOME}/render/americana/openmaptiles-build/country_osm_grid.sql.gz
+COPY --from=country_grid_build /tmp/country_osm_grid.sql.gz ${HOME}/render/americana/openmaptiles-build/country_osm_grid.sql.gz
 
 ENV PUPPETEER_CACHE_DIR=${HOME}/.cache/puppeteer
 RUN cd ${HOME}/render/americana && npm ci && npm run build
