@@ -150,9 +150,10 @@ app.post("/jobs/:id/delete", requireSession(), async (c) => {
   // Ownership is enforced in SQL; a missing or non-owned job returns null.
   const deleted = await deleteJob(c.env.DB, c.req.param("id"), email);
   if (!deleted) return c.notFound();
-  if (deleted.result_key) {
+  for (const key of [deleted.result_key, deleted.result_key_mp4]) {
+    if (!key) continue;
     try {
-      await c.env.RESULTS.delete(deleted.result_key);
+      await c.env.RESULTS.delete(key);
     } catch (e) {
       // The row is already gone; a dangling R2 object is harmless (nothing links it).
       console.error("R2 delete failed", e);
@@ -197,7 +198,13 @@ app.get("/internal/jobs/:id", async (c) => {
 app.post("/internal/jobs/:id", async (c) => {
   if (!checkCallbackAuth(c)) return c.json({ error: "unauthorized" }, 401);
   const id = c.req.param("id");
-  const body = await c.req.json<{ status: string; resultKey?: string; error?: string; message?: string }>();
+  const body = await c.req.json<{
+    status: string;
+    resultKey?: string;
+    resultKeyMp4?: string;
+    error?: string;
+    message?: string;
+  }>();
 
   // Any callback may carry a progress message.
   if (body.message) await updateJobProgress(c.env.DB, id, body.message);
@@ -225,7 +232,7 @@ app.post("/internal/jobs/:id", async (c) => {
   }
   if (body.status === "done") {
     if (!body.resultKey) return c.json({ error: "resultKey required" }, 400);
-    const applied = await markJobDone(c.env.DB, id, body.resultKey);
+    const applied = await markJobDone(c.env.DB, id, body.resultKey, body.resultKeyMp4 ?? null);
     if (applied) {
       const job = await getJob(c.env.DB, id);
       if (job) {
@@ -244,14 +251,26 @@ app.post("/internal/jobs/:id", async (c) => {
 // ---- Serve result media from R2 ---------------------------------------
 app.get("/r/*", async (c) => {
   const key = c.req.path.slice("/r/".length);
-  const obj = await c.env.RESULTS.get(key);
+  const rangeHeader = c.req.raw.headers.get("range");
+  const obj = await c.env.RESULTS.get(key, rangeHeader ? { range: c.req.raw.headers } : undefined);
   if (!obj) return c.notFound();
-  return new Response(obj.body, {
-    headers: {
-      "content-type": obj.httpMetadata?.contentType ?? "image/gif",
-      "cache-control": "public, max-age=86400",
-    },
-  });
+
+  const headers = new Headers();
+  obj.writeHttpMetadata(headers);
+  if (!headers.has("content-type")) headers.set("content-type", "image/gif");
+  headers.set("cache-control", "public, max-age=86400");
+  headers.set("accept-ranges", "bytes");
+
+  // R2 only populates `range` when the request actually asked for one (and could
+  // satisfy it); a plain request still gets the full body with a normal 200 so
+  // existing <img> GIF traffic is unaffected.
+  if (rangeHeader && obj.range && "offset" in obj.range && "length" in obj.range) {
+    const start = obj.range.offset ?? 0;
+    const length = obj.range.length ?? obj.size - start;
+    headers.set("content-range", `bytes ${start}-${start + length - 1}/${obj.size}`);
+    return new Response(obj.body, { status: 206, headers });
+  }
+  return new Response(obj.body, { headers });
 });
 
 // Scheduled reaper: fail jobs stuck past the timeout (infra failures, load-time

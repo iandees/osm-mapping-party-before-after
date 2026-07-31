@@ -24,6 +24,7 @@ export interface Job {
   error: string | null;
   progress: string | null;
   result_key: string | null; // full R2 object key of the finished GIF
+  result_key_mp4: string | null; // full R2 object key of the MP4 version, if the render produced one
   cost_usd: number | null; // frozen Fargate compute-cost estimate, set at terminal state
   created_at: number;
   scheduled_for: number | null; // when a future job should be dispatched; NULL if immediate
@@ -272,14 +273,15 @@ export async function markJobDone(
   db: D1Database,
   id: string,
   resultKey: string,
+  mp4Key: string | null = null,
   now = nowSeconds(),
 ): Promise<boolean> {
   const res = await db
     .prepare(
-      `UPDATE jobs SET status = 'done', result_key = ?, finished_at = ?, cost_usd = ${COST_SQL} ` +
+      `UPDATE jobs SET status = 'done', result_key = ?, result_key_mp4 = ?, finished_at = ?, cost_usd = ${COST_SQL} ` +
         "WHERE id = ? AND status = 'running'",
     )
-    .bind(resultKey, now, now, now, FARGATE_HOURLY_USD, id)
+    .bind(resultKey, mp4Key, now, now, now, FARGATE_HOURLY_USD, id)
     .run();
   return res.meta.changes > 0;
 }

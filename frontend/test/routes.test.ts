@@ -11,8 +11,8 @@ async function sessionCookie(e: Parameters<typeof app.request>[2], email: string
   return (verify.headers.get("set-cookie") ?? "").split(";")[0];
 }
 
-/** Create a finished job (with a result_key) owned by `email`. */
-async function doneJob(email: string) {
+/** Create a finished job (with a result_key, and optionally a result_key_mp4) owned by `email`. */
+async function doneJob(email: string, withMp4 = false) {
   const job = await createJob(env.DB, {
     email,
     bbox: "-0.2,51.4,0,51.6",
@@ -24,7 +24,7 @@ async function doneJob(email: string) {
     scale_bar: false,
   });
   await markJobRunning(env.DB, job.id);
-  await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`);
+  await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, withMp4 ? `jobs/${job.id}/map.mp4` : null);
   return job;
 }
 
@@ -98,6 +98,59 @@ describe("home", () => {
     expect(html).toContain(`/jobs/${job.id}`);
   });
 
+  it("renders gallery cards as an autoplaying video when the job has an mp4", async () => {
+    const { env: e } = testEnv();
+    const job = await createJob(env.DB, {
+      email: "someone@example.com",
+      bbox: "-0.2,51.4,0,51.6",
+      time_before: "2020-01-01T00:00:00Z",
+      time_after: "2024-01-01T00:00:00Z",
+      zoom: 12,
+      output_px: 400,
+      num_frames: 2,
+      scale_bar: false,
+    });
+    await markJobRunning(env.DB, job.id);
+    await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, `jobs/${job.id}/map.mp4`);
+
+    const html = await (await app.request("/", {}, e)).text();
+    expect(html).toContain(
+      `<video autoplay muted loop playsinline preload="metadata" aria-label="before/after map" src="/r/jobs/${job.id}/map.mp4">`,
+    );
+  });
+
+  it("shows a video preview and both download links when an mp4 is available", async () => {
+    const { env: e } = testEnv();
+    const job = await createJob(env.DB, {
+      email: "someone@example.com",
+      bbox: "-0.2,51.4,0,51.6",
+      time_before: "2020-01-01T00:00:00Z",
+      time_after: "2024-01-01T00:00:00Z",
+      zoom: 12,
+      output_px: 400,
+      num_frames: 2,
+      scale_bar: false,
+    });
+    await markJobRunning(env.DB, job.id);
+    await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, `jobs/${job.id}/map.mp4`);
+
+    const html = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
+    expect(html).toContain('<video class="result"');
+    expect(html).toContain(`/r/jobs/${job.id}/map.mp4`);
+    expect(html).toContain(`Download: <a href="/r/jobs/${job.id}/map.mp4" download>MP4</a>`);
+    expect(html).toContain(`<a href="/r/jobs/${job.id}/map.gif" download>GIF</a>`);
+  });
+
+  it("falls back to a gif image with no download links when no mp4 was produced", async () => {
+    const { env: e } = testEnv();
+    const job = await doneJob("someone@example.com");
+
+    const html = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
+    expect(html).toContain('<img class="result"');
+    expect(html).not.toContain("<video");
+    expect(html).not.toContain("Download:");
+  });
+
   it("shows the frozen compute cost on a finished job page", async () => {
     const { env: e } = testEnv();
     const job = await createJob(env.DB, {
@@ -111,7 +164,7 @@ describe("home", () => {
       scale_bar: false,
     });
     await markJobRunning(env.DB, job.id, 1000);
-    await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, 1000 + 3600); // ran one hour
+    await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, null, 1000 + 3600); // ran one hour
 
     const html = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
     expect(html).toContain("Estimated compute cost");
@@ -410,6 +463,19 @@ describe("delete render", () => {
     expect(del).toHaveBeenCalledWith(`jobs/${job.id}/map.gif`);
   });
 
+  it("removes both the GIF and MP4 objects when the job has an mp4", async () => {
+    const del = vi.fn().mockResolvedValue(undefined);
+    const { env: e } = testEnv({ RESULTS: { delete: del } });
+    const cookie = await sessionCookie(e, "owner@example.com");
+    const job = await doneJob("owner@example.com", true);
+
+    const res = await app.request(delReq(job.id, { cookie }), {}, e);
+    expect(res.status).toBe(302);
+    expect(del).toHaveBeenCalledWith(`jobs/${job.id}/map.gif`);
+    expect(del).toHaveBeenCalledWith(`jobs/${job.id}/map.mp4`);
+    expect(del).toHaveBeenCalledTimes(2);
+  });
+
   it("does not let a non-owner delete someone else's render", async () => {
     const del = vi.fn().mockResolvedValue(undefined);
     const { env: e } = testEnv({ RESULTS: { delete: del } });
@@ -532,6 +598,38 @@ describe("internal callbacks", () => {
     expect(job?.result_key).toBe(`jobs/${id}/`);
     expect(emailSend).toHaveBeenCalledOnce();
   });
+
+  it("persists an mp4 key from the done callback when present", async () => {
+    const { env: e } = testEnv();
+    const id = await makeJob();
+
+    await app.request(
+      new Request(`https://app.example.com/internal/jobs/${id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-callback-secret": "callback-secret" },
+        body: JSON.stringify({ status: "running" }),
+      }),
+      {},
+      e,
+    );
+    await app.request(
+      new Request(`https://app.example.com/internal/jobs/${id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-callback-secret": "callback-secret" },
+        body: JSON.stringify({
+          status: "done",
+          resultKey: `jobs/${id}/map.gif`,
+          resultKeyMp4: `jobs/${id}/map.mp4`,
+        }),
+      }),
+      {},
+      e,
+    );
+
+    const job = await getJob(env.DB, id);
+    expect(job?.result_key).toBe(`jobs/${id}/map.gif`);
+    expect(job?.result_key_mp4).toBe(`jobs/${id}/map.mp4`);
+  });
 });
 
 describe("internal job params", () => {
@@ -563,5 +661,48 @@ describe("internal job params", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { scale_bar: boolean };
     expect(body.scale_bar).toBe(true);
+  });
+});
+
+describe("GET /r/*", () => {
+  it("returns the full body with a 200 when no Range header is sent", async () => {
+    const { env: e } = testEnv();
+    const key = "jobs/no-range-test/map.gif";
+    const bytes = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    await env.RESULTS.put(key, bytes, { httpMetadata: { contentType: "image/gif" } });
+
+    const res = await app.request(`/r/${key}`, {}, e);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/gif");
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
+  });
+
+  it("defaults content-type to image/gif when R2 stored none", async () => {
+    const { env: e } = testEnv();
+    const key = "jobs/no-content-type-test/map.gif";
+    await env.RESULTS.put(key, new Uint8Array([9, 9, 9]));
+
+    const res = await app.request(`/r/${key}`, {}, e);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/gif");
+  });
+
+  it("returns 206 with content-range and only the requested bytes for a Range request", async () => {
+    const { env: e } = testEnv();
+    const key = "jobs/range-test/map.mp4";
+    const bytes = new Uint8Array([10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+    await env.RESULTS.put(key, bytes, { httpMetadata: { contentType: "video/mp4" } });
+
+    const res = await app.request(`/r/${key}`, { headers: { range: "bytes=2-4" } }, e);
+    expect(res.status).toBe(206);
+    expect(res.headers.get("accept-ranges")).toBe("bytes");
+    expect(res.headers.get("content-range")).toBe(`bytes 2-4/${bytes.length}`);
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes.slice(2, 5));
+  });
+
+  it("returns 404 for a missing key", async () => {
+    const { env: e } = testEnv();
+    const res = await app.request("/r/jobs/does-not-exist/map.gif", {}, e);
+    expect(res.status).toBe(404);
   });
 });

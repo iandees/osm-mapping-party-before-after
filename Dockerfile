@@ -13,6 +13,7 @@ RUN apt-get update --quiet \
 RUN apt-get update --quiet \
 && apt-get install --quiet -y --no-install-recommends \
  make \
+ ffmpeg \
  fonts-hanazono \
  fonts-noto-cjk \
  fonts-noto-hinted \
