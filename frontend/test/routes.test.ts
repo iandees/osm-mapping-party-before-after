@@ -111,7 +111,7 @@ describe("home", () => {
       scale_bar: false,
     });
     await markJobRunning(env.DB, job.id, 1000);
-    await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, 1000 + 3600); // ran one hour
+    await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, null, 1000 + 3600); // ran one hour
 
     const html = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
     expect(html).toContain("Estimated compute cost");
