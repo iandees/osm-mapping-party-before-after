@@ -111,6 +111,7 @@ describe("home", () => {
       output_px: 400,
       num_frames: 2,
       scale_bar: false,
+      style: "carto",
     });
     await markJobRunning(env.DB, job.id);
     await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, `jobs/${job.id}/map.mp4`);
@@ -132,6 +133,7 @@ describe("home", () => {
       output_px: 400,
       num_frames: 2,
       scale_bar: false,
+      style: "carto",
     });
     await markJobRunning(env.DB, job.id);
     await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, `jobs/${job.id}/map.mp4`);
