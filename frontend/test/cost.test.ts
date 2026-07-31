@@ -18,6 +18,7 @@ const baseJob: Job = {
   error: null,
   progress: null,
   result_key: "jobs/j1/x.gif",
+  result_key_mp4: null,
   cost_usd: null,
   created_at: 1000,
   scheduled_for: null,

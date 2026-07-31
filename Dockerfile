@@ -98,6 +98,7 @@ ENV PATH="/usr/lib/postgresql/16/bin:${PATH}"
 RUN apt-get update --quiet \
 && apt-get install --quiet -y --no-install-recommends \
  make \
+ ffmpeg \
  fonts-hanazono \
  fonts-noto-cjk \
  fonts-noto-hinted \

@@ -89,11 +89,11 @@ function layout(title: string, body: string, head = ""): string {
   .presets a { display: inline-block; padding: 0.2rem 0.6rem; border: 1px solid #ccc; border-radius: 999px; font-size: 0.85rem; text-decoration: none; color: inherit; }
   .presets a:hover { border-color: #e6007e; color: #e6007e; }
   #map { height: 380px; margin-top: 0.5rem; border: 1px solid #ccc; }
-  img.result { max-width: 100%; border: 1px solid #ccc; margin: 0.5rem 0; display: block; }
+  .result { max-width: 100%; border: 1px solid #ccc; margin: 0.5rem 0; display: block; }
   .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; margin: 1rem 0; }
   .gallery .card { position: relative; }
   .gallery a { display: block; border: 1px solid #ccc; border-radius: 6px; overflow: hidden; text-decoration: none; color: inherit; }
-  .gallery img { width: 100%; height: 140px; object-fit: cover; display: block; }
+  .gallery img, .gallery video { width: 100%; height: 140px; object-fit: cover; display: block; }
   .gallery .placeholder { height: 140px; display: flex; flex-direction: column; align-items: center;
     justify-content: center; gap: 0.4rem; padding: 0.5rem; text-align: center; font-size: 0.85rem;
     background: rgba(127,127,127,0.12); box-sizing: border-box; }
@@ -145,6 +145,9 @@ function cardLabel(j: Job): string {
 
 /** The inner media of a card, chosen by job status. */
 function cardInner(j: Job): string {
+  if (j.status === "done" && j.result_key_mp4) {
+    return `<video autoplay muted loop playsinline preload="metadata" aria-label="before/after map" src="/r/${esc(j.result_key_mp4)}"></video>`;
+  }
   if (j.status === "done" && j.result_key) {
     return `<img loading="lazy" src="/r/${esc(j.result_key)}" alt="before/after map">`;
   }
@@ -475,11 +478,15 @@ ${galleryGrid(others, "Maps from others")}`,
 export function jobPage(job: Job, isOwner = false): string {
   const hasName = !!(job.name && job.name.trim() !== "");
   if (job.status === "done" && job.result_key) {
+    const media = job.result_key_mp4
+      ? `<video class="result" autoplay muted loop playsinline controls src="/r/${esc(job.result_key_mp4)}"></video>
+<p class="muted">Download: <a href="/r/${esc(job.result_key_mp4)}" download>MP4</a> · <a href="/r/${esc(job.result_key)}" download>GIF</a></p>`
+      : `<img class="result" src="/r/${esc(job.result_key)}" alt="animated before/after map">`;
     return layout(
       hasName ? job.name! : "Your map is ready",
       `<h1>${hasName ? esc(job.name!) : "Your before/after map"}</h1>
 <p class="muted">${jobMeta(job)}</p>
-<img class="result" src="/r/${esc(job.result_key)}" alt="animated before/after map">
+${media}
 ${costLine(job)}
 <p><a href="/">Make another</a>${isOwner ? ` · ${deleteForm(job.id, "delete-form", "Delete this map")}` : ""}</p>`,
     );

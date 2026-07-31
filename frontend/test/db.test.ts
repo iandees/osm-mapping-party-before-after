@@ -76,22 +76,39 @@ describe("job lifecycle", () => {
   it("transitions queued -> running -> done", async () => {
     const job = await createJob(DB, sampleJob, 1000);
     expect(await markJobRunning(DB, job.id, 1100)).toBe(true);
-    expect(await markJobDone(DB, job.id, "results/abc.gif", 1200)).toBe(true);
+    expect(await markJobDone(DB, job.id, "results/abc.gif", null, 1200)).toBe(true);
     const done = await getJob(DB, job.id);
     expect(done?.status).toBe("done");
     expect(done?.result_key).toBe("results/abc.gif");
     expect(done?.finished_at).toBe(1200);
   });
 
+  it("persists an mp4 key alongside the gif when provided", async () => {
+    const job = await createJob(DB, sampleJob, 1000);
+    await markJobRunning(DB, job.id, 1100);
+    expect(await markJobDone(DB, job.id, "results/abc.gif", "results/abc.mp4", 1200)).toBe(true);
+    const done = await getJob(DB, job.id);
+    expect(done?.result_key).toBe("results/abc.gif");
+    expect(done?.result_key_mp4).toBe("results/abc.mp4");
+  });
+
+  it("leaves the mp4 key null when the render produced no mp4", async () => {
+    const job = await createJob(DB, sampleJob, 1000);
+    await markJobRunning(DB, job.id, 1100);
+    await markJobDone(DB, job.id, "results/abc.gif", null, 1200);
+    const done = await getJob(DB, job.id);
+    expect(done?.result_key_mp4).toBeNull();
+  });
+
   it("cannot mark done a job that is not running", async () => {
     const job = await createJob(DB, sampleJob, 1000);
-    expect(await markJobDone(DB, job.id, "k", 1200)).toBe(false); // still queued
+    expect(await markJobDone(DB, job.id, "k", null, 1200)).toBe(false); // still queued
   });
 
   it("freezes a compute cost when a job is marked done", async () => {
     const job = await createJob(DB, sampleJob, 1000);
     await markJobRunning(DB, job.id, 1100);
-    await markJobDone(DB, job.id, "results/abc.gif", 1100 + 3600); // ran one hour
+    await markJobDone(DB, job.id, "results/abc.gif", null, 1100 + 3600); // ran one hour
     const done = await getJob(DB, job.id);
     expect(done?.cost_usd).toBeCloseTo(0.11652, 5);
   });
@@ -123,7 +140,7 @@ describe("job lifecycle", () => {
   it("deleteJob removes an owned job and returns its row", async () => {
     const job = await createJob(DB, sampleJob, 1000);
     await markJobRunning(DB, job.id, 1100);
-    await markJobDone(DB, job.id, "results/abc.gif", 1200);
+    await markJobDone(DB, job.id, "results/abc.gif", null, 1200);
     const deleted = await deleteJob(DB, job.id, sampleJob.email);
     expect(deleted?.id).toBe(job.id);
     expect(deleted?.result_key).toBe("results/abc.gif");
@@ -162,7 +179,7 @@ describe("job lifecycle", () => {
   it("does not reap terminal jobs", async () => {
     const job = await createJob(DB, sampleJob, 1000);
     await markJobRunning(DB, job.id, 1000);
-    await markJobDone(DB, job.id, "k", 1000);
+    await markJobDone(DB, job.id, "k", null, 1000);
     const failed = await failStuckJobs(DB, 1000, 999999);
     expect(failed).toHaveLength(0);
     expect((await getJob(DB, job.id))?.status).toBe("done");
@@ -181,9 +198,9 @@ describe("job lifecycle", () => {
     const a = await createJob(DB, { ...sampleJob, email: "a@x.com" }, 1000);
     const b = await createJob(DB, { ...sampleJob, email: "b@x.com" }, 1000);
     await markJobRunning(DB, a.id, 1100);
-    await markJobDone(DB, a.id, "jobs/a/x.gif", 1200);
+    await markJobDone(DB, a.id, "jobs/a/x.gif", null, 1200);
     await markJobRunning(DB, b.id, 1100);
-    await markJobDone(DB, b.id, "jobs/b/x.gif", 1300);
+    await markJobDone(DB, b.id, "jobs/b/x.gif", null, 1300);
 
     const recent = await getRecentDoneJobs(DB, 10);
     expect(recent.map((j) => j.id)).toEqual([b.id, a.id]); // newest finished first
@@ -200,7 +217,7 @@ describe("job lifecycle", () => {
     const queued = await createJob(DB, { ...sampleJob, email: "a@x.com" }, 3000);
     await createJob(DB, { ...sampleJob, email: "b@x.com" }, 3000); // another user's
     await markJobRunning(DB, done.id, 1100);
-    await markJobDone(DB, done.id, "jobs/a/x.gif", 1200);
+    await markJobDone(DB, done.id, "jobs/a/x.gif", null, 1200);
     await markJobRunning(DB, running.id, 2100);
 
     const mine = await getJobsByEmail(DB, "a@x.com", 10);
@@ -221,7 +238,7 @@ describe("job lifecycle", () => {
     await createJob(DB, sampleJob, 1000);
     expect(await countActiveJobsByEmail(DB, sampleJob.email)).toBe(2);
     await markJobRunning(DB, a.id, 1100);
-    await markJobDone(DB, a.id, "k", 1200);
+    await markJobDone(DB, a.id, "k", null, 1200);
     expect(await countActiveJobsByEmail(DB, sampleJob.email)).toBe(1);
   });
 });
