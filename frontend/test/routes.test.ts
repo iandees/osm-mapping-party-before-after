@@ -98,6 +98,57 @@ describe("home", () => {
     expect(html).toContain(`/jobs/${job.id}`);
   });
 
+  it("renders gallery cards as an autoplaying video when the job has an mp4", async () => {
+    const { env: e } = testEnv();
+    const job = await createJob(env.DB, {
+      email: "someone@example.com",
+      bbox: "-0.2,51.4,0,51.6",
+      time_before: "2020-01-01T00:00:00Z",
+      time_after: "2024-01-01T00:00:00Z",
+      zoom: 12,
+      output_px: 400,
+      num_frames: 2,
+      scale_bar: false,
+    });
+    await markJobRunning(env.DB, job.id);
+    await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, `jobs/${job.id}/map.mp4`);
+
+    const html = await (await app.request("/", {}, e)).text();
+    expect(html).toContain(`<video autoplay muted loop playsinline src="/r/jobs/${job.id}/map.mp4">`);
+  });
+
+  it("shows a video preview and both download links when an mp4 is available", async () => {
+    const { env: e } = testEnv();
+    const job = await createJob(env.DB, {
+      email: "someone@example.com",
+      bbox: "-0.2,51.4,0,51.6",
+      time_before: "2020-01-01T00:00:00Z",
+      time_after: "2024-01-01T00:00:00Z",
+      zoom: 12,
+      output_px: 400,
+      num_frames: 2,
+      scale_bar: false,
+    });
+    await markJobRunning(env.DB, job.id);
+    await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, `jobs/${job.id}/map.mp4`);
+
+    const html = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
+    expect(html).toContain('<video class="result"');
+    expect(html).toContain(`/r/jobs/${job.id}/map.mp4`);
+    expect(html).toContain(`Download: <a href="/r/jobs/${job.id}/map.mp4" download>MP4</a>`);
+    expect(html).toContain(`<a href="/r/jobs/${job.id}/map.gif" download>GIF</a>`);
+  });
+
+  it("falls back to a gif image with no download links when no mp4 was produced", async () => {
+    const { env: e } = testEnv();
+    const job = await doneJob("someone@example.com");
+
+    const html = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
+    expect(html).toContain('<img class="result"');
+    expect(html).not.toContain("<video");
+    expect(html).not.toContain("Download:");
+  });
+
   it("shows the frozen compute cost on a finished job page", async () => {
     const { env: e } = testEnv();
     const job = await createJob(env.DB, {
