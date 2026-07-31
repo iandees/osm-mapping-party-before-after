@@ -11,8 +11,8 @@ async function sessionCookie(e: Parameters<typeof app.request>[2], email: string
   return (verify.headers.get("set-cookie") ?? "").split(";")[0];
 }
 
-/** Create a finished job (with a result_key) owned by `email`. */
-async function doneJob(email: string) {
+/** Create a finished job (with a result_key, and optionally a result_key_mp4) owned by `email`. */
+async function doneJob(email: string, withMp4 = false) {
   const job = await createJob(env.DB, {
     email,
     bbox: "-0.2,51.4,0,51.6",
@@ -24,7 +24,7 @@ async function doneJob(email: string) {
     scale_bar: false,
   });
   await markJobRunning(env.DB, job.id);
-  await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`);
+  await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, withMp4 ? `jobs/${job.id}/map.mp4` : null);
   return job;
 }
 
@@ -114,7 +114,9 @@ describe("home", () => {
     await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, `jobs/${job.id}/map.mp4`);
 
     const html = await (await app.request("/", {}, e)).text();
-    expect(html).toContain(`<video autoplay muted loop playsinline src="/r/jobs/${job.id}/map.mp4">`);
+    expect(html).toContain(
+      `<video autoplay muted loop playsinline preload="metadata" aria-label="before/after map" src="/r/jobs/${job.id}/map.mp4">`,
+    );
   });
 
   it("shows a video preview and both download links when an mp4 is available", async () => {
@@ -461,6 +463,19 @@ describe("delete render", () => {
     expect(del).toHaveBeenCalledWith(`jobs/${job.id}/map.gif`);
   });
 
+  it("removes both the GIF and MP4 objects when the job has an mp4", async () => {
+    const del = vi.fn().mockResolvedValue(undefined);
+    const { env: e } = testEnv({ RESULTS: { delete: del } });
+    const cookie = await sessionCookie(e, "owner@example.com");
+    const job = await doneJob("owner@example.com", true);
+
+    const res = await app.request(delReq(job.id, { cookie }), {}, e);
+    expect(res.status).toBe(302);
+    expect(del).toHaveBeenCalledWith(`jobs/${job.id}/map.gif`);
+    expect(del).toHaveBeenCalledWith(`jobs/${job.id}/map.mp4`);
+    expect(del).toHaveBeenCalledTimes(2);
+  });
+
   it("does not let a non-owner delete someone else's render", async () => {
     const del = vi.fn().mockResolvedValue(undefined);
     const { env: e } = testEnv({ RESULTS: { delete: del } });
@@ -646,5 +661,48 @@ describe("internal job params", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { scale_bar: boolean };
     expect(body.scale_bar).toBe(true);
+  });
+});
+
+describe("GET /r/*", () => {
+  it("returns the full body with a 200 when no Range header is sent", async () => {
+    const { env: e } = testEnv();
+    const key = "jobs/no-range-test/map.gif";
+    const bytes = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    await env.RESULTS.put(key, bytes, { httpMetadata: { contentType: "image/gif" } });
+
+    const res = await app.request(`/r/${key}`, {}, e);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/gif");
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
+  });
+
+  it("defaults content-type to image/gif when R2 stored none", async () => {
+    const { env: e } = testEnv();
+    const key = "jobs/no-content-type-test/map.gif";
+    await env.RESULTS.put(key, new Uint8Array([9, 9, 9]));
+
+    const res = await app.request(`/r/${key}`, {}, e);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/gif");
+  });
+
+  it("returns 206 with content-range and only the requested bytes for a Range request", async () => {
+    const { env: e } = testEnv();
+    const key = "jobs/range-test/map.mp4";
+    const bytes = new Uint8Array([10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+    await env.RESULTS.put(key, bytes, { httpMetadata: { contentType: "video/mp4" } });
+
+    const res = await app.request(`/r/${key}`, { headers: { range: "bytes=2-4" } }, e);
+    expect(res.status).toBe(206);
+    expect(res.headers.get("accept-ranges")).toBe("bytes");
+    expect(res.headers.get("content-range")).toBe(`bytes 2-4/${bytes.length}`);
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes.slice(2, 5));
+  });
+
+  it("returns 404 for a missing key", async () => {
+    const { env: e } = testEnv();
+    const res = await app.request("/r/jobs/does-not-exist/map.gif", {}, e);
+    expect(res.status).toBe(404);
   });
 });

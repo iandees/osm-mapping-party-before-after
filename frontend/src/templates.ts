@@ -146,7 +146,7 @@ function cardLabel(j: Job): string {
 /** The inner media of a card, chosen by job status. */
 function cardInner(j: Job): string {
   if (j.status === "done" && j.result_key_mp4) {
-    return `<video autoplay muted loop playsinline src="/r/${esc(j.result_key_mp4)}"></video>`;
+    return `<video autoplay muted loop playsinline preload="metadata" aria-label="before/after map" src="/r/${esc(j.result_key_mp4)}"></video>`;
   }
   if (j.status === "done" && j.result_key) {
     return `<img loading="lazy" src="/r/${esc(j.result_key)}" alt="before/after map">`;

@@ -258,7 +258,7 @@ def upload_results(job_id: str) -> dict[str, str]:
     keys = {"gif": key}
 
     mp4_path = path[: -len(".gif")] + ".mp4"
-    if os.path.exists(mp4_path):
+    if os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 0:
         mp4_key = prefix + os.path.basename(mp4_path)
         r2.upload_file(mp4_path, bucket, mp4_key, ExtraArgs={"ContentType": "video/mp4"})
         print(f"uploaded {mp4_key}")

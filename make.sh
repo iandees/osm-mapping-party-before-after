@@ -302,7 +302,7 @@ for ZOOM in $(seq "$MIN_ZOOM" "$MAX_ZOOM") ; do
     # yuv420p requires, without resampling a single pixel of the actual
     # frame — it only ever adds a <=1px black border. The delivered video is
     # therefore always exactly the size the user requested (or +1px).
-    if ! ffmpeg -y -i "$NEW_GIF" \
+    if ! ffmpeg -nostdin -hide_banner -loglevel error -y -i "$NEW_GIF" \
         -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0:black" \
         -c:v libx264 -crf 23 -preset medium -pix_fmt yuv420p -movflags +faststart \
         "$NEW_MP4" ; then

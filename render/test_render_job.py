@@ -76,6 +76,23 @@ class UploadResultsTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 render_job.upload_results("job-1")
 
+    def test_skips_upload_of_a_zero_byte_mp4(self):
+        self._touch("progress.region.2020.2024.bbox.z12.gif")
+        # A truncated/empty MP4 (e.g. ffmpeg exiting 0 but writing nothing) should
+        # be treated the same as "no MP4 was produced" rather than uploaded.
+        open(os.path.join(self.tmp.name, "progress.region.2020.2024.bbox.z12.mp4"), "wb").close()
+        with mock.patch("boto3.client") as client:
+            r2 = client.return_value
+            keys = render_job.upload_results("job-1")
+
+        self.assertEqual(keys, {"gif": "jobs/job-1/progress.region.2020.2024.bbox.z12.gif"})
+        r2.upload_file.assert_called_once_with(
+            os.path.join(self.tmp.name, "progress.region.2020.2024.bbox.z12.gif"),
+            "bucket",
+            "jobs/job-1/progress.region.2020.2024.bbox.z12.gif",
+            ExtraArgs={"ContentType": "image/gif"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
