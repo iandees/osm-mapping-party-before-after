@@ -67,7 +67,7 @@ const server = http.createServer(async (req, res) => {
     res.end("not found");
   }
 });
-await new Promise((resolve) => server.listen(PORT, resolve));
+await new Promise((resolve) => server.listen(PORT, "127.0.0.1", resolve));
 
 const browser = await puppeteer.launch({
   // Required running as a non-root container user with no seccomp/userns

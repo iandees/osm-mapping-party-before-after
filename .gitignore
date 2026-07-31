@@ -4,6 +4,7 @@
 *.gif
 node_modules/
 sample.png
+.imposm-cache/
 
 # Python bytecode
 __pycache__/
