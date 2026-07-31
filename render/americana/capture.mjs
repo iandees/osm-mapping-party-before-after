@@ -13,7 +13,12 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.AMERICANA_CAPTURE_PORT || 8842);
-const CONTENT_TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
+const CONTENT_TYPES = {
+  ".html": "text/html",
+  ".js": "text/javascript",
+  ".css": "text/css",
+  ".json": "application/json",
+};
 
 const [, , bboxArg, zoomArg, tileSourceUrl, outfile] = process.argv;
 if (!bboxArg || !zoomArg || !tileSourceUrl || !outfile) {

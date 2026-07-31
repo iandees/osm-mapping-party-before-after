@@ -9,6 +9,8 @@
 # "import-data" image (pinned to the same 7.2 version as openmaptiles-tools
 # and openmaptiles_build below) via ogr2ogr at Postgres-import time (see
 # make.sh); only the raw files themselves are copied out here.
+FROM openmaptiles/import-data:7.2 AS reference_data_build
+
 # The OpenMapTiles building layer's aggregation function (update_building.sql,
 # from the pinned commit below) also hard-requires a "country_osm_grid" table
 # — per-country grid polygons used to bound the ST_ClusterDBSCAN aggregation
@@ -25,7 +27,7 @@
 # get invalidated by every source-tree change further down (that layer sat
 # after `COPY . ${HOME}`, forcing a re-download on every rebuild regardless
 # of whether this file's own dependencies changed).
-FROM curlimages/curl:latest AS country_grid_build
+FROM curlimages/curl:8.11.1 AS country_grid_build
 ARG COUNTRY_OSM_GRID_COMMIT=ccede88ad1fee7528467e669889c0e539566d86f
 ARG COUNTRY_OSM_GRID_SHA256=5291fc51b4dd2abb00aed97a51d33eec9ee6584c45d3903c12c8abf6228d828a
 RUN curl -fsSL -o /tmp/country_osm_grid.sql \
@@ -33,7 +35,33 @@ RUN curl -fsSL -o /tmp/country_osm_grid.sql \
  && echo "${COUNTRY_OSM_GRID_SHA256}  /tmp/country_osm_grid.sql" | sha256sum -c - \
  && gzip -9 /tmp/country_osm_grid.sql
 
-FROM openmaptiles/import-data:7.2 AS reference_data_build
+# browser-entry.js used to fetch style.json/shields.json live from
+# americanamap.org on every single frame render. Unlike everything else in
+# this pipeline (which pins exact versions/commits/checksums — even
+# country_osm_grid.sql above gets a pinned commit + checksum), that was a
+# live, unversioned dependency: an upstream outage or breaking schema change
+# would break every future render with no rollback, and it made historic
+# renders non-reproducible (a "2015" render used whatever today's style
+# happened to be, not any particular pinned version). Fetch and pin them here
+# at image-build time instead. Unlike country_osm_grid.sql there is no
+# commit-pinned mirror to fetch instead — these are server-rendered outputs,
+# not files tracked in a git repo — so this can only pin by
+# checksum-at-fetch-time, not by commit too. That's still enough: any future
+# upstream change now requires deliberately re-fetching and bumping the
+# checksum ARGs below (a loud, reviewed build failure) instead of silently
+# being picked up by every future render. Scoped narrowly to just these two
+# JSON files, which define the actual style/shield logic — the sprite sheet
+# and font/glyph URLs referenced *inside* style.json are left as live
+# references to americanamap.org's CDN, a much smaller, more acceptable
+# residual risk since sprites/glyphs are simple binary assets that change far
+# less often than style/shield logic.
+FROM curlimages/curl:8.11.1 AS americana_style_build
+ARG AMERICANA_STYLE_SHA256=4df2fa443587642fd9dc428072062d5f7cd1f34a7dfb324b59437ede98a05943
+ARG AMERICANA_SHIELDS_SHA256=aaf72a3113739377b88ad7cfd7d85cd3c22881e3955a85f8b8416a76869a2fcc
+RUN curl -fsSL -o /tmp/style.json https://americanamap.org/style.json \
+ && echo "${AMERICANA_STYLE_SHA256}  /tmp/style.json" | sha256sum -c - \
+ && curl -fsSL -o /tmp/shields.json https://americanamap.org/shields.json \
+ && echo "${AMERICANA_SHIELDS_SHA256}  /tmp/shields.json" | sha256sum -c -
 
 FROM openmaptiles/openmaptiles-tools:7.2 AS openmaptiles_build
 ARG OPENMAPTILES_COMMIT=6c11838d38030148832c039c2ea367274db86a87
@@ -177,6 +205,8 @@ COPY --from=reference_data_build /import/natural_earth/natural_earth_vector.sqli
 COPY --from=reference_data_build /import/water_polygons/ ${HOME}/render/americana/openmaptiles-build/water_polygons/
 COPY --from=reference_data_build /import/lake_centerline/lake_centerline.geojson ${HOME}/render/americana/openmaptiles-build/lake_centerline.geojson
 COPY --from=country_grid_build /tmp/country_osm_grid.sql.gz ${HOME}/render/americana/openmaptiles-build/country_osm_grid.sql.gz
+COPY --from=americana_style_build /tmp/style.json ${HOME}/render/americana/style/style.json
+COPY --from=americana_style_build /tmp/shields.json ${HOME}/render/americana/style/shields.json
 
 ENV PUPPETEER_CACHE_DIR=${HOME}/.cache/puppeteer
 RUN cd ${HOME}/render/americana && npm ci && npm run build

@@ -13,8 +13,12 @@ import maplibregl from "maplibre-gl";
 import { URLShieldRenderer } from "@americana/maplibre-shield-generator";
 import { getGlobalStateForLocalization, getLocales } from "@americana/diplomat";
 
-const STYLE_URL = "https://americanamap.org/style.json";
-const SHIELDS_URL = "https://americanamap.org/shields.json";
+// Pinned at Docker image-build time (see the Dockerfile's americana_style_build
+// stage) and served locally by capture.mjs's own static file server — not
+// fetched live from americanamap.org on every frame render. See the
+// Dockerfile comment above that stage for why.
+const STYLE_URL = "/style/style.json";
+const SHIELDS_URL = "/style/shields.json";
 
 const orderedRouteAttributes = ["network", "ref", "name", "color"];
 
