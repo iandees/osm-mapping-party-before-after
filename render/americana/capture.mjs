@@ -68,9 +68,21 @@ const browser = await puppeteer.launch({
   // Required running as a non-root container user with no seccomp/userns
   // namespace setup — Fargate tasks run in a locked-down container runtime.
   args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  // Cheap insurance above Puppeteer's default 30s. Verified at implementation
+  // time that on Apple Silicon under Docker's amd64 (QEMU user-mode) CPU
+  // emulation, headless Chromium's own GPU/utility helper subprocess re-exec
+  // (`--type=gpu-process`/`--type=utility`) collides with QEMU's own
+  // command-line parsing ("qemu: unknown option 'type=utility'"), which
+  // crashes the browser process outright rather than merely being slow — no
+  // timeout value fixes that locally, since it's a process-model
+  // incompatibility, not a speed problem. On real amd64 hardware (production
+  // Fargate) there is no emulation layer and this class of failure cannot
+  // occur, so this is pure insurance there, not a workaround for anything.
+  timeout: 120_000,
 });
 const page = await browser.newPage();
 await page.setViewport({ width, height });
+page.setDefaultTimeout(120_000);
 page.on("console", (msg) => console.log("[page]", msg.text()));
 page.on("pageerror", (err) => console.error("[pageerror]", err));
 

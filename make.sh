@@ -3,13 +3,14 @@ set -o errexit -o nounset -o pipefail
 
 if [ $# -ge 1 ] && [ "$1" = "-h" ] ; then
 	cat <<-END
-	Usage: $0 INPUT.osh.pbf BEFORETIME AFTERTIME BBOX [MIN_ZOOM] [MAX_ZOOM] [NUM_FRAMES] [SCALE_BAR]
+	Usage: $0 INPUT.osh.pbf BEFORETIME AFTERTIME BBOX [MIN_ZOOM] [MAX_ZOOM] [NUM_FRAMES] [SCALE_BAR] [STYLE]
 
 	BEFORETIME & AFTERTIME are ISO-8601 timestamps
 	BBOX is a comma-separated long/lat bounding box (left,bottom,right,top) and can be found via http://bboxfinder.com/
 	MIN_ZOOM and MAX_ZOOM are optional zoom levels (default: 6 and 12)
 	NUM_FRAMES is the number of frames to generate for the GIF (default: 2)
 	SCALE_BAR is 1 to draw a scale bar in the lower-left of each frame, 0 to omit it (default: 0)
+	STYLE is "carto" (default) or "americana"
 	END
 	exit 0
 fi
@@ -24,6 +25,7 @@ MIN_ZOOM=${5:-6}
 MAX_ZOOM=${6:-12}
 NUM_FRAMES=${7:-2}
 SCALE_BAR=${8:-0}
+STYLE=${9:-carto}
 
 # for planet-latest.osm.obf we calculate the "planet" part
 PREFIX=$(basename "$INPUT_FILE")
@@ -39,18 +41,27 @@ PBF_FILE="$(realpath "$PREFIX.$BBOX.osh.pbf")"
 if [ "$INPUT_FILE" -nt "$PBF_FILE" ] ; then
   echo "Extracting the OSM history for just this bounding box $BBOX"
   NEWFILE=$(mktemp -p . "tmp.extract.${PREFIX}.XXXXXX.osm.pbf")
+  # Americana would ideally use the "smart" strategy here for relation-complete
+  # (not just way-complete) extraction, mitigating the route-relation
+  # completeness gap found in the spike (a shield-eligible relation extending
+  # outside the bbox can otherwise lose its route classification). Verified at
+  # implementation time: osmium-tool's --with-history mode only supports the
+  # default "complete_ways" strategy — both --strategy=smart and
+  # --strategy=simple are rejected outright ("the '<name>' strategy is not
+  # supported for history files"), so there is no stricter strategy available
+  # for history extracts. Extraction is therefore identical for both styles.
   osmium extract --with-history --overwrite -o "$NEWFILE" --bbox "$BBOX_COMMA" "$INPUT_FILE"
   mv "$NEWFILE" "$PBF_FILE"
 fi
 
-if [ ! -s "$ROOT/openstreetmap-carto/node_modules/.bin/carto" ] ; then
+if [ "$STYLE" = "carto" ] && [ ! -s "$ROOT/openstreetmap-carto/node_modules/.bin/carto" ] ; then
   cd "$ROOT/openstreetmap-carto"
   echo "Installing carto into $ROOT/openstreetmap-carto/node_modules with npm..."
   npm init -y
   npm install carto -q
 fi
 
-if [ ! -s "$ROOT/openstreetmap-carto/project.xml" ] ; then
+if [ "$STYLE" = "carto" ] && [ ! -s "$ROOT/openstreetmap-carto/project.xml" ] ; then
   cd "$ROOT"
   if [ ! -e "$ROOT/openstreetmap-carto" ] ; then
     git submodule update
@@ -72,13 +83,83 @@ if [ "$(psql -At -c "select count(*) from pg_database where datname = 'gis';")" 
   psql -d gis -c "create extension hstore;"
   # JIT hurts map-rendering queries; openstreetmap-carto recommends disabling it.
   psql -d gis -c "alter system set jit = off;" -c "select pg_reload_conf();"
-  # openstreetmap-carto v6 (flex backend) needs helper functions and the
-  # carto_pois whitelist table loaded once into the database.
-  psql -d gis -f "$ROOT/openstreetmap-carto/functions.sql"
-  psql -d gis -f "$ROOT/openstreetmap-carto/common-values.sql"
+  if [ "$STYLE" = "carto" ] ; then
+    # openstreetmap-carto v6 (flex backend) needs helper functions and the
+    # carto_pois whitelist table loaded once into the database.
+    psql -d gis -f "$ROOT/openstreetmap-carto/functions.sql"
+    psql -d gis -f "$ROOT/openstreetmap-carto/common-values.sql"
+  fi
+  if [ "$STYLE" = "americana" ] ; then
+    # Several OpenMapTiles layers hard-require static reference datasets that
+    # osmium/imposm never produce from OSM data itself (see the Dockerfile for
+    # what/why each is needed and where it's from). Load them once (same
+    # lifetime as the rest of the "gis" database), using the same ogr2ogr
+    # invocations upstream openmaptiles' import-data image uses — except
+    # clipped to this job's bbox (with a fixed margin) rather than imported
+    # planet-wide: water_polygons.shp alone is >1GB and lake_centerline.geojson
+    # >200MB unclipped, dwarfing the actual per-frame OSM extract for a job
+    # that's typically a city block or two, and costing minutes per job
+    # otherwise (found via local end-to-end timing). Natural Earth's own
+    # source is EPSG:4326; water_polygons/lake_centerline's is EPSG:3857
+    # (matching each dataset's own ogr2ogr -s_srs above), so both a lon/lat
+    # and a Web-Mercator clip box are computed.
+    read -r CLIP4326_XMIN CLIP4326_YMIN CLIP4326_XMAX CLIP4326_YMAX \
+            CLIP3857_XMIN CLIP3857_YMIN CLIP3857_XMAX CLIP3857_YMAX <<PYOUT
+$(python3 - <<PYEOF
+import math
+left, bottom, right, top = map(float, "$BBOX_SPACE".split())
+margin = 2.0  # degrees — generous enough that a lake centerline, country
+              # grid cell, or admin boundary segment straddling the
+              # requested bbox isn't truncated right at its edge
+left = max(left - margin, -180.0)
+right = min(right + margin, 180.0)
+bottom = max(bottom - margin, -85.0511)
+top = min(top + margin, 85.0511)
+
+def merc(lon, lat):
+    x = lon * 20037508.34 / 180.0
+    y = math.log(math.tan((90 + lat) * math.pi / 360.0)) / (math.pi / 180.0)
+    return x, y * 20037508.34 / 180.0
+
+x0, y0 = merc(left, bottom)
+x1, y1 = merc(right, top)
+print(left, bottom, right, top, x0, y0, x1, y1)
+PYEOF
+)
+PYOUT
+    echo "Importing Natural Earth reference data..."
+    PGCLIENTENCODING=UTF8 ogr2ogr -progress -f Postgresql -s_srs EPSG:4326 -t_srs EPSG:3857 \
+      -clipsrc "$CLIP4326_XMIN" "$CLIP4326_YMIN" "$CLIP4326_XMAX" "$CLIP4326_YMAX" \
+      PG:"dbname=gis" \
+      -lco GEOMETRY_NAME=geometry -lco OVERWRITE=YES -lco DIM=2 -nlt GEOMETRY -overwrite \
+      "$ROOT/render/americana/openmaptiles-build/natural_earth_vector.sqlite"
+    echo "Importing water polygons reference data..."
+    PGCLIENTENCODING=UTF8 ogr2ogr -progress -f Postgresql -s_srs EPSG:3857 -t_srs EPSG:3857 \
+      -clipsrc "$CLIP3857_XMIN" "$CLIP3857_YMIN" "$CLIP3857_XMAX" "$CLIP3857_YMAX" \
+      -lco OVERWRITE=YES -lco GEOMETRY_NAME=geometry -overwrite \
+      -nln osm_ocean_polygon -nlt geometry --config PG_USE_COPY YES \
+      PG:"dbname=gis" \
+      "$ROOT/render/americana/openmaptiles-build/water_polygons/water_polygons.shp"
+    echo "Importing lake centerline reference data..."
+    PGCLIENTENCODING=UTF8 ogr2ogr -progress -f Postgresql -s_srs EPSG:3857 -t_srs EPSG:3857 \
+      -clipsrc "$CLIP3857_XMIN" "$CLIP3857_YMIN" "$CLIP3857_XMAX" "$CLIP3857_YMAX" \
+      PG:"dbname=gis" \
+      -lco OVERWRITE=YES -overwrite -nln lake_centerline \
+      "$ROOT/render/americana/openmaptiles-build/lake_centerline.geojson"
+    # The building layer's aggregation function also needs a static
+    # "country_osm_grid" table (see the Dockerfile for what/why) — a plain
+    # pg_dump SQL file, loaded directly. Left unclipped: at ~87MB uncommpressed
+    # of coarse per-country polygons (vs. water_polygons/lake_centerline's
+    # hundreds of MB of fine detail), a full load costs seconds not minutes,
+    # and building.sql's own use of it already bounds work per grid cell via
+    # ST_Intersects against the (bbox-sized) building table.
+    echo "Importing country_osm_grid reference data..."
+    gunzip -c "$ROOT/render/americana/openmaptiles-build/country_osm_grid.sql.gz" \
+      | psql -d gis -v ON_ERROR_STOP=1 -q
+  fi
 fi
 
-if [ ! -e "$ROOT/openstreetmap-carto/data/.external-data-done" ] ; then
+if [ "$STYLE" = "carto" ] && [ ! -e "$ROOT/openstreetmap-carto/data/.external-data-done" ] ; then
   cd "$ROOT/openstreetmap-carto/"
   echo "Downloading external datasets..."
   ./scripts/get-external-data.py
@@ -116,6 +197,45 @@ TIMESTAMPS=$(generate_timestamps "$TIME_BEFORE" "$TIME_AFTER" "$NUM_FRAMES")
 # breaks. openstreetmap-carto v6 uses the flex output backend (single lua style).
 OSM2PGSQL_ARGS=(--output flex --style openstreetmap-carto-flex.lua -d gis)
 
+# Americana: imposm3 import target + a martin instance serving it, running
+# for the rest of this job (not restarted per-frame — schema/function setup
+# happens once after frame 0; martin re-queries live data on every request,
+# so it stays valid as later frames' `imposm diff` mutates the same tables).
+# Never a persistent service beyond this job's lifetime.
+IMPOSM_CACHE_DIR="$ROOT/.imposm-cache"
+# Verified at implementation time: imposm3 and martin need DIFFERENT
+# connection-string schemes for the same "gis" database — imposm3 (a
+# separate Go tool, not libpq) only accepts "postgis://" ("unsupported
+# database type: postgresql" otherwise); martin (Rust) only accepts the
+# standard libpq "postgresql://"/"postgres://" URI schemes ("Unrecognizable
+# connection strings" for "postgis://", confirmed by martin logging that
+# exact error and then never actually serving tiles, which is what caused
+# capture.mjs's tile fetches, and thus its Puppeteer page render, to hang
+# until timeout in local testing).
+IMPOSM_CONNECTION="postgis://postgres@localhost/gis"
+MARTIN_CONNECTION="postgresql://postgres@localhost/gis"
+MARTIN_PID=""
+
+start_martin_if_needed() {
+  if [ -z "$MARTIN_PID" ] ; then
+    echo "Starting martin..."
+    martin --listen-addresses 127.0.0.1:3000 "$MARTIN_CONNECTION" &
+    MARTIN_PID=$!
+    for _ in $(seq 1 30) ; do
+      curl -sf http://127.0.0.1:3000/catalog > /dev/null 2>&1 && break
+      sleep 1
+    done
+  fi
+}
+stop_martin() {
+  if [ -n "$MARTIN_PID" ] ; then
+    kill "$MARTIN_PID" 2>/dev/null || true
+    wait "$MARTIN_PID" 2>/dev/null || true
+    MARTIN_PID=""
+  fi
+}
+trap stop_martin EXIT
+
 # Process each timestamp. Frame 0 is a full slim create; later frames apply only
 # the OsmChange delta from the previous frame's snapshot (osmium derive-changes),
 # so per-frame DB cost scales with the delta, not the whole region. Because append
@@ -132,16 +252,56 @@ for TIME in $TIMESTAMPS; do
   osmium time-filter --overwrite -o "$NEWFILE" "$PBF_FILE" "$TIME"
   mv "$NEWFILE" "$SNAP"
 
-  cd "$ROOT/openstreetmap-carto"
   echo "Importing data for $TIME..."
-  if [ "$FRAME_IDX" -eq 0 ] ; then
-    osm2pgsql --create --slim "${OSM2PGSQL_ARGS[@]}" "$SNAP"
-    psql -d gis -f indexes.sql
+  if [ "$STYLE" = "americana" ] ; then
+    MAPPING="$ROOT/render/americana/openmaptiles-build/mapping.yaml"
+    SQLDIR="$ROOT/render/americana/openmaptiles-build/sql"
+    SQLTOOLSDIR="$ROOT/render/americana/openmaptiles-build/sql-tools"
+    if [ "$FRAME_IDX" -eq 0 ] ; then
+      imposm import -mapping "$MAPPING" -read "$SNAP" -write -diff \
+        -overwritecache -deployproduction \
+        -cachedir "$IMPOSM_CACHE_DIR" -connection "$IMPOSM_CONNECTION"
+      # zzz_language.sql (below) also calls the standard Postgres contrib
+      # unaccent() function; postgis/hstore are created unconditionally
+      # above, but unaccent is Americana-only so it's created here instead.
+      psql -d gis -v ON_ERROR_STOP=1 -c "create extension if not exists unaccent;"
+      # openmaptiles-tools' own SQL_TOOLS_DIR (postgis-vt-util.sql, the hstore
+      # delete_empty_keys() helper, language/label-grid functions, etc) must be
+      # loaded before the generated tileset SQL, which calls these functions
+      # without defining them — see the Dockerfile's openmaptiles_build stage.
+      # zzz_language.sql (in that same dir) in turn calls the osml10n Postgres
+      # extension, which isn't built for this image's Postgres version — load
+      # our stub replacements first (see that file for why).
+      psql -d gis -v ON_ERROR_STOP=1 -f "$ROOT/render/americana/sql/osml10n-stub.sql"
+      for f in "$SQLTOOLSDIR"/*.sql ; do
+        psql -d gis -v ON_ERROR_STOP=1 -f "$f"
+      done
+      psql -d gis -v ON_ERROR_STOP=1 -f "$SQLDIR/run_first.sql"
+      for f in "$SQLDIR"/parallel/*.sql ; do
+        psql -d gis -v ON_ERROR_STOP=1 -f "$f"
+      done
+      psql -d gis -v ON_ERROR_STOP=1 -f "$SQLDIR/run_last.sql"
+      start_martin_if_needed
+    else
+      DELTA=$(mktemp -p "$ROOT" tmp.delta.XXXXXX.osc)
+      osmium derive-changes --overwrite "$PREV_SNAP" "$SNAP" -o "$DELTA"
+      gzip -c "$DELTA" > "$DELTA.gz"
+      imposm diff -mapping "$MAPPING" \
+        -cachedir "$IMPOSM_CACHE_DIR" -connection "$IMPOSM_CONNECTION" "$DELTA.gz"
+      rm -f "$DELTA" "$DELTA.gz" "$PREV_SNAP"
+    fi
   else
-    DELTA=$(mktemp -p "$ROOT" tmp.delta.XXXXXX.osc)
-    osmium derive-changes --overwrite "$PREV_SNAP" "$SNAP" -o "$DELTA"
-    osm2pgsql --append --slim "${OSM2PGSQL_ARGS[@]}" "$DELTA"
-    rm -f "$DELTA" "$PREV_SNAP"
+    cd "$ROOT/openstreetmap-carto"
+    if [ "$FRAME_IDX" -eq 0 ] ; then
+      osm2pgsql --create --slim "${OSM2PGSQL_ARGS[@]}" "$SNAP"
+      psql -d gis -f indexes.sql
+    else
+      DELTA=$(mktemp -p "$ROOT" tmp.delta.XXXXXX.osc)
+      osmium derive-changes --overwrite "$PREV_SNAP" "$SNAP" -o "$DELTA"
+      osm2pgsql --append --slim "${OSM2PGSQL_ARGS[@]}" "$DELTA"
+      rm -f "$DELTA" "$PREV_SNAP"
+    fi
+    cd "$ROOT"
   fi
   touch "$ROOT/.$PREFIX.$TIME.$BBOX_COMMA.generated"
   PREV_SNAP="$SNAP"
@@ -152,7 +312,11 @@ for TIME in $TIMESTAMPS; do
     if [ "$ROOT/.$PREFIX.$TIME.$BBOX_COMMA.generated" -nt "$PREFIX.$TIME.$BBOX_COMMA.z${ZOOM}.png" ] ; then
       echo "Generating zoom ${ZOOM} at time ${TIME}"
       GENERATED="$PREFIX.$TIME.$BBOX_COMMA.z${ZOOM}.png"
-      nik4.py openstreetmap-carto/project.xml "$GENERATED" -b $BBOX_SPACE -z "$ZOOM" || break
+      if [ "$STYLE" = "americana" ] ; then
+        node "$ROOT/render/americana/capture.mjs" "$BBOX_COMMA" "$ZOOM" "http://127.0.0.1:3000/getmvt" "$GENERATED" || break
+      else
+        nik4.py openstreetmap-carto/project.xml "$GENERATED" -b $BBOX_SPACE -z "$ZOOM" || break
+      fi
       # Bake a white band with a timestamp (bottom-left) and the ODbL attribution
       # (bottom-right) onto the bottom of the frame.
       OVERLAY_FONT=/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf

@@ -1,16 +1,34 @@
 # ---- Americana: pre-generate OpenMapTiles build artifacts from a pinned
 # commit (the one validated end-to-end in the feasibility spike). Only the
 # generated output is copied into the final image, not this whole stage.
+# Several OpenMapTiles layers (boundary/place, water, water_name) hard-require
+# static reference datasets that osmium/imposm never produce from OSM data
+# itself: Natural Earth (country/state boundaries), a water polygons extract
+# (ocean fill), and an OSM lake-centerline extract (used for lake name label
+# placement). Upstream openmaptiles loads all three from this same
+# "import-data" image (pinned to the same 7.2 version as openmaptiles-tools
+# and openmaptiles_build below) via ogr2ogr at Postgres-import time (see
+# make.sh); only the raw files themselves are copied out here.
+FROM openmaptiles/import-data:7.2 AS reference_data_build
+
 FROM openmaptiles/openmaptiles-tools:7.2 AS openmaptiles_build
 ARG OPENMAPTILES_COMMIT=6c11838d38030148832c039c2ea367274db86a87
 RUN git clone https://github.com/openmaptiles/openmaptiles.git /omt \
  && cd /omt && git checkout "$OPENMAPTILES_COMMIT"
 WORKDIR /omt
-RUN mkdir -p /build/sql \
+RUN mkdir -p /build/sql /build/sql-tools \
  && generate-imposm3 openmaptiles.yaml > /build/mapping.yaml \
  && generate-sql openmaptiles.yaml --dir /build/sql \
  && generate-sqltomvt openmaptiles.yaml --key --postgis-ver 3.3.4 \
-      --function --fname=getmvt >> /build/sql/run_last.sql
+      --function --fname=getmvt >> /build/sql/run_last.sql \
+ && cp /usr/src/app/sql/*.sql /build/sql-tools/
+# /usr/src/app/sql is openmaptiles-tools' own SQL_TOOLS_DIR (postgis-vt-util.sql,
+# a hstore delete_empty_keys() helper, language/label-grid functions, etc) — the
+# generated tileset SQL above (run_first.sql, parallel/*.sql) calls these
+# functions but doesn't define them. openmaptiles-tools' own `import-sql`
+# script always loads SQL_TOOLS_DIR before SQL_DIR for exactly this reason;
+# make.sh's Americana import path does the same (loads sql-tools/*.sql before
+# run_first.sql, frame 0 only).
 
 FROM postgis/postgis:18-3.6 AS development_build
 
@@ -22,6 +40,35 @@ RUN apt-get update --quiet \
  netcat-openbsd \
 && locale-gen $LANG && update-locale LANG=$LANG
 
+# Use Postgres 16, not this image's default 18, for the server itself (the
+# PGDG apt repo this base image already has configured serves every
+# supported major version side by side, so this doesn't change the Debian
+# release or any other package). Verified at Americana implementation time:
+# PostgreSQL 17+ forces CREATE/REFRESH MATERIALIZED VIEW to run its
+# populating query with search_path hard-restricted to "pg_catalog,
+# pg_temp" (a real, documented security hardening, not a bug — see the
+# CREATE MATERIALIZED VIEW docs). OpenMapTiles' generated SQL
+# (run_first.sql/parallel/*.sql, pinned to the commit above) calls its own
+# helper functions (zres, get_basic_names, LabelGrid, etc.) unqualified from
+# inside the very materialized views it creates — written against
+# openmaptiles-tools' own reference stack (openmaptiles/postgis:7.2,
+# PostgreSQL 14), which predates this restriction. Every one of those
+# matviews fails ("function ... does not exist") under PG17/18 unless each
+# call site is individually schema-qualified or each function individually
+# ALTER'd to pin its own search_path — impractical across the vendored SQL.
+# PG16 is the newest version without this restriction, so the vendored SQL
+# runs unmodified. Carto's osm2pgsql-based import doesn't create
+# materialized views and is unaffected either way (verified: STYLE=carto
+# end-to-end still passes with PG16). The 18 packages stay installed
+# (unused) rather than being purged, to avoid disturbing anything else in
+# this base image that assumes their presence.
+RUN apt-get install --quiet -y --no-install-recommends \
+ postgresql-16 postgresql-16-postgis-3 postgresql-16-postgis-3-scripts \
+&& apt-get clean autoclean \
+&& apt-get autoremove --yes \
+&& rm -rf /var/lib/{apt,dpkg,cache,log}/
+ENV PG_MAJOR=16
+ENV PATH="/usr/lib/postgresql/16/bin:${PATH}"
 
 # Get packages
 RUN apt-get update --quiet \
@@ -101,6 +148,24 @@ ENV HOME=/home/postgres
 COPY . ${HOME}
 
 COPY --from=openmaptiles_build /build ${HOME}/render/americana/openmaptiles-build
+COPY --from=reference_data_build /import/natural_earth/natural_earth_vector.sqlite ${HOME}/render/americana/openmaptiles-build/natural_earth_vector.sqlite
+COPY --from=reference_data_build /import/water_polygons/ ${HOME}/render/americana/openmaptiles-build/water_polygons/
+COPY --from=reference_data_build /import/lake_centerline/lake_centerline.geojson ${HOME}/render/americana/openmaptiles-build/lake_centerline.geojson
+
+# The OpenMapTiles building layer's aggregation function (update_building.sql,
+# from the pinned commit above) also hard-requires a "country_osm_grid" table
+# — per-country grid polygons used to bound the ST_ClusterDBSCAN aggregation
+# to a manageable area (openmaptiles/openmaptiles#1044). Unlike Natural Earth,
+# openmaptiles-tools has no bundled copy or generator for this table; it's a
+# long-standing static community artifact (originally circulated for
+# imposm/osm2pgsql building-aggregation setups) mirrored in the OSMNames
+# project. Baked into the image at build time, gzipped, and loaded once by
+# make.sh the same way as Natural Earth (frame 0, STYLE=americana only).
+RUN wget --quiet -O /tmp/country_osm_grid.sql \
+      https://raw.githubusercontent.com/OSMNames/OSMNames/master/data/sql/country_osm_grid.sql \
+ && gzip -9 /tmp/country_osm_grid.sql \
+ && mkdir -p ${HOME}/render/americana/openmaptiles-build \
+ && mv /tmp/country_osm_grid.sql.gz ${HOME}/render/americana/openmaptiles-build/country_osm_grid.sql.gz
 
 ENV PUPPETEER_CACHE_DIR=${HOME}/.cache/puppeteer
 RUN cd ${HOME}/render/americana && npm ci && npm run build
