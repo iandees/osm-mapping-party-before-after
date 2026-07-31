@@ -26,6 +26,10 @@ MAX_ZOOM=${6:-12}
 NUM_FRAMES=${7:-2}
 SCALE_BAR=${8:-0}
 STYLE=${9:-carto}
+case "$STYLE" in
+  carto|americana) ;;
+  *) echo "unknown STYLE: $STYLE (expected 'carto' or 'americana')" >&2 ; exit 2 ;;
+esac
 
 # for planet-latest.osm.obf we calculate the "planet" part
 PREFIX=$(basename "$INPUT_FILE")
@@ -282,23 +286,39 @@ trap stop_martin EXIT
 # already handles per-view failures (an expected, transient ordering issue on
 # pass 1), so the outer command must not abort the whole script over it.
 refresh_matviews() {
-  for pass in 1 2 ; do
-    psql -d gis -v ON_ERROR_STOP=0 -c "
-      DO \$\$
-      DECLARE r RECORD;
-      BEGIN
-        FOR r IN SELECT matviewname FROM pg_matviews WHERE schemaname = 'public' LOOP
-          BEGIN
-            EXECUTE format('REFRESH MATERIALIZED VIEW %I', r.matviewname);
-          EXCEPTION WHEN OTHERS THEN
-            -- dependency not ready yet this pass; the second pass (or this
-            -- same pass's later iterations) picks it up.
-            NULL;
-          END;
-        END LOOP;
-      END \$\$;
-    "
-  done
+  # Pass 1's exception handler swallows failures silently: they're expected
+  # and transient (a matview whose dependency hasn't been refreshed yet this
+  # pass — the second pass, or this same pass's later iterations, picks it
+  # up). Pass 2 is different: by then every matview has already had one
+  # refresh attempt, so a failure there is not the expected ordering issue —
+  # it's a real, likely-permanent failure. Surface it with RAISE WARNING so it
+  # at least shows up in the job's logs instead of vanishing entirely.
+  psql -d gis -v ON_ERROR_STOP=0 -c "
+    DO \$\$
+    DECLARE r RECORD;
+    BEGIN
+      FOR r IN SELECT matviewname FROM pg_matviews WHERE schemaname = 'public' LOOP
+        BEGIN
+          EXECUTE format('REFRESH MATERIALIZED VIEW %I', r.matviewname);
+        EXCEPTION WHEN OTHERS THEN
+          NULL;
+        END;
+      END LOOP;
+    END \$\$;
+  "
+  psql -d gis -v ON_ERROR_STOP=0 -c "
+    DO \$\$
+    DECLARE r RECORD;
+    BEGIN
+      FOR r IN SELECT matviewname FROM pg_matviews WHERE schemaname = 'public' LOOP
+        BEGIN
+          EXECUTE format('REFRESH MATERIALIZED VIEW %I', r.matviewname);
+        EXCEPTION WHEN OTHERS THEN
+          RAISE WARNING 'matview refresh failed: % — %', r.matviewname, SQLERRM;
+        END;
+      END LOOP;
+    END \$\$;
+  "
 }
 
 # Process each timestamp. Frame 0 is a full slim create; later frames apply only
