@@ -197,7 +197,13 @@ app.get("/internal/jobs/:id", async (c) => {
 app.post("/internal/jobs/:id", async (c) => {
   if (!checkCallbackAuth(c)) return c.json({ error: "unauthorized" }, 401);
   const id = c.req.param("id");
-  const body = await c.req.json<{ status: string; resultKey?: string; error?: string; message?: string }>();
+  const body = await c.req.json<{
+    status: string;
+    resultKey?: string;
+    resultKeyMp4?: string;
+    error?: string;
+    message?: string;
+  }>();
 
   // Any callback may carry a progress message.
   if (body.message) await updateJobProgress(c.env.DB, id, body.message);
@@ -225,7 +231,7 @@ app.post("/internal/jobs/:id", async (c) => {
   }
   if (body.status === "done") {
     if (!body.resultKey) return c.json({ error: "resultKey required" }, 400);
-    const applied = await markJobDone(c.env.DB, id, body.resultKey);
+    const applied = await markJobDone(c.env.DB, id, body.resultKey, body.resultKeyMp4 ?? null);
     if (applied) {
       const job = await getJob(c.env.DB, id);
       if (job) {

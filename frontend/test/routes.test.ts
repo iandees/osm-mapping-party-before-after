@@ -532,6 +532,38 @@ describe("internal callbacks", () => {
     expect(job?.result_key).toBe(`jobs/${id}/`);
     expect(emailSend).toHaveBeenCalledOnce();
   });
+
+  it("persists an mp4 key from the done callback when present", async () => {
+    const { env: e } = testEnv();
+    const id = await makeJob();
+
+    await app.request(
+      new Request(`https://app.example.com/internal/jobs/${id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-callback-secret": "callback-secret" },
+        body: JSON.stringify({ status: "running" }),
+      }),
+      {},
+      e,
+    );
+    await app.request(
+      new Request(`https://app.example.com/internal/jobs/${id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-callback-secret": "callback-secret" },
+        body: JSON.stringify({
+          status: "done",
+          resultKey: `jobs/${id}/map.gif`,
+          resultKeyMp4: `jobs/${id}/map.mp4`,
+        }),
+      }),
+      {},
+      e,
+    );
+
+    const job = await getJob(env.DB, id);
+    expect(job?.result_key).toBe(`jobs/${id}/map.gif`);
+    expect(job?.result_key_mp4).toBe(`jobs/${id}/map.mp4`);
+  });
 });
 
 describe("internal job params", () => {
