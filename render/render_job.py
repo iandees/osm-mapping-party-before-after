@@ -224,15 +224,20 @@ def run_make(history_file: str, params: dict, worker: "Worker") -> None:
         raise RuntimeError(f"make.sh exited with code {rc}")
 
 
-def upload_results(job_id: str) -> str:
-    """Upload the produced GIF to R2 at its native resolution; return its full object key.
+def upload_results(job_id: str) -> dict[str, str]:
+    """Upload the produced GIF (and its MP4, if make.sh produced one) to R2 at
+    their native resolution; return their R2 object keys under "gif" and,
+    when present, "mp4".
 
     The GIF is delivered exactly as rendered — no post-render scaling, since
     resampling blurs the map labels. The frontend's suggested zoom keeps the
     native render close to the requested output size.
 
-    A job renders a single zoom, so there is exactly one GIF; if make.sh somehow
-    produced more, we deliver the first.
+    A job renders a single zoom, so there is exactly one GIF; if make.sh
+    somehow produced more, we deliver the first GIF and its matching MP4
+    (same basename, .mp4 extension), if any. The MP4 is best-effort — its
+    absence (make.sh's ffmpeg step failed or ffmpeg is missing) doesn't fail
+    an otherwise-successful render.
     """
     r2 = boto3.client(
         "s3",
@@ -250,7 +255,16 @@ def upload_results(job_id: str) -> str:
     key = prefix + os.path.basename(path)
     r2.upload_file(path, bucket, key, ExtraArgs={"ContentType": "image/gif"})
     print(f"uploaded {key}")
-    return key
+    keys = {"gif": key}
+
+    mp4_path = path[: -len(".gif")] + ".mp4"
+    if os.path.exists(mp4_path):
+        mp4_key = prefix + os.path.basename(mp4_path)
+        r2.upload_file(mp4_path, bucket, mp4_key, ExtraArgs={"ContentType": "video/mp4"})
+        print(f"uploaded {mp4_key}")
+        keys["mp4"] = mp4_key
+
+    return keys
 
 
 def main() -> int:
@@ -292,9 +306,12 @@ def main() -> int:
         run_make(history_file, params, worker)
 
         worker.progress("Uploading your map…")
-        key = upload_results(job_id)
+        keys = upload_results(job_id)
 
-        worker.post_status(status="done", resultKey=key)
+        done_kwargs = {"resultKey": keys["gif"]}
+        if "mp4" in keys:
+            done_kwargs["resultKeyMp4"] = keys["mp4"]
+        worker.post_status(status="done", **done_kwargs)
         return 0
     except Exception as e:  # noqa: BLE001 — report any failure back to the Worker
         print(f"render failed: {e}", file=sys.stderr)
