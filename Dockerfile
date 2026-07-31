@@ -39,6 +39,8 @@ RUN apt-get update --quiet \
  libprotozero-dev \
  lua5.3 \
  mapnik-utils \
+ # npm intentionally omitted here — Debian's npm/nodejs pair conflicts with
+ # the NodeSource nodejs install below and gets autoremoved otherwise.
  osm2pgsql \
  osmctools \
  osmium-tool \
