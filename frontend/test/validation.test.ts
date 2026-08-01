@@ -43,6 +43,17 @@ describe("validateJobInput", () => {
     expect(unchecked.ok && unchecked.value.scale_bar).toBe(false);
   });
 
+  it("parses style: defaults to carto, accepts americana, falls back to carto for anything else", () => {
+    const absent = validateJobInput(valid, MAX_AREA);
+    expect(absent.ok && absent.value.style).toBe("carto");
+
+    const americana = validateJobInput({ ...valid, style: "americana" }, MAX_AREA);
+    expect(americana.ok && americana.value.style).toBe("americana");
+
+    const garbage = validateJobInput({ ...valid, style: "bogus" }, MAX_AREA);
+    expect(garbage.ok && garbage.value.style).toBe("carto");
+  });
+
   it("treats name as optional: trims, caps, and nulls empties", () => {
     const absent = validateJobInput(valid, MAX_AREA);
     expect(absent.ok && absent.value.name).toBeNull();

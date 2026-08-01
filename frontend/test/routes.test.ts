@@ -230,25 +230,12 @@ describe("home", () => {
     expect(html).toContain(`/r/jobs/${theirs.id}/map.gif`); // others' finished map
   });
 
-  it("omits the hidden style field by default", async () => {
+  it("renders the style dropdown with Carto selected by default", async () => {
     const { env: e } = testEnv();
     const cookie = await sessionCookie(e, "me@example.com");
     const html = await (await app.request("/", { headers: { cookie } }, e)).text();
-    expect(html).not.toContain('name="style"');
-  });
-
-  it("?style=americana adds a hidden style field submitting americana", async () => {
-    const { env: e } = testEnv();
-    const cookie = await sessionCookie(e, "me@example.com");
-    const html = await (await app.request("/?style=americana", { headers: { cookie } }, e)).text();
-    expect(html).toContain('<input type="hidden" name="style" value="americana">');
-  });
-
-  it("ignores an unrecognized ?style value", async () => {
-    const { env: e } = testEnv();
-    const cookie = await sessionCookie(e, "me@example.com");
-    const html = await (await app.request("/?style=bogus", { headers: { cookie } }, e)).text();
-    expect(html).not.toContain('name="style"');
+    expect(html).toContain('<option value="carto" selected>OpenStreetMap Carto</option>');
+    expect(html).toContain('<option value="americana">Americana</option>');
   });
 });
 
@@ -348,6 +335,40 @@ describe("verify + submit", () => {
     const status = await app.request(`/jobs/${jobId}/status`, {}, e);
     expect(status.status).toBe(200);
     expect(await status.json()).toMatchObject({ status: "queued" });
+  });
+
+  it("submits with style=americana and persists it", async () => {
+    const { env: e } = testEnv();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<ok/>", { status: 200 }));
+
+    const token = await createLoginToken(env.DB, "user@example.com", 900);
+    const verify = await app.request(`/verify/${token}`, {}, e);
+    const cookie = (verify.headers.get("set-cookie") ?? "").split(";")[0];
+
+    const submit = await app.request(
+      new Request("https://app.example.com/submit", {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          cookie,
+        },
+        body: new URLSearchParams({
+          bbox: "-0.2,51.4,0.0,51.6",
+          time_before: "2020-01-01T00:00",
+          time_after: "2024-01-01T00:00",
+          output_px: "800",
+          num_frames: "2",
+          style: "americana",
+        }).toString(),
+      }),
+      {},
+      e,
+    );
+    expect(submit.status).toBe(302);
+    const jobId = (submit.headers.get("location") ?? "").split("/").pop()!;
+
+    const job = await getJob(env.DB, jobId);
+    expect(job?.style).toBe("americana");
   });
 
   it("rejects an invalid job submission", async () => {

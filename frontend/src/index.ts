@@ -51,12 +51,7 @@ app.get("/", async (c) => {
     getRecentDoneJobsExcludingEmail(c.env.DB, session.email, 12),
   ]);
   const horizon = Number(c.env.MAX_FUTURE_HORIZON_DAYS) || DEFAULT_MAX_FUTURE_HORIZON_DAYS;
-  // Undocumented ?style=americana query param: renders the same visible form
-  // with a hidden `style` field, so a shared link can silently opt a
-  // submission into the Americana render path (no frontend picker exists
-  // yet). Any other/missing value is ignored — the form defaults to carto.
-  const style = c.req.query("style") === "americana" ? "americana" : undefined;
-  return c.html(formPage(session.email, mine, others, undefined, horizon, style));
+  return c.html(formPage(session.email, mine, others, undefined, horizon));
 });
 
 // ---- Magic-link login -------------------------------------------------
