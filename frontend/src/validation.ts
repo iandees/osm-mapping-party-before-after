@@ -81,6 +81,7 @@ export interface JobInput {
   output_px: number; // longest side of the delivered GIF
   num_frames: number;
   scale_bar: boolean;
+  style: string;
 }
 
 /** Trim and cap an optional name; empty/whitespace/non-string → null. Never errors. */
@@ -185,6 +186,13 @@ export function validateJobInput(
   // other value is simply treated as unchecked.
   const scaleBar = form.scale_bar === "on";
 
+  // ---- style ----
+  // No UI control sets this yet (frontend picker is a deferred follow-up) —
+  // any value other than "americana" is treated as the "carto" default, same
+  // permissive-parsing spirit as scale_bar above, so a stray/garbage value
+  // never errors the whole submission.
+  const style = form.style === "americana" ? "americana" : "carto";
+
   if (errors.length > 0 || !coords) return { ok: false, errors };
 
   const [l, b, r, t] = coords;
@@ -199,6 +207,7 @@ export function validateJobInput(
       output_px: size!,
       num_frames: frames!,
       scale_bar: scaleBar,
+      style,
     },
   };
 }

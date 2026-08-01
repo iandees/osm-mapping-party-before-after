@@ -22,6 +22,7 @@ async function doneJob(email: string, withMp4 = false) {
     output_px: 400,
     num_frames: 2,
     scale_bar: false,
+    style: "carto",
   });
   await markJobRunning(env.DB, job.id);
   await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, withMp4 ? `jobs/${job.id}/map.mp4` : null);
@@ -89,6 +90,7 @@ describe("home", () => {
       output_px: 400,
       num_frames: 2,
       scale_bar: false,
+      style: "carto",
     });
     await markJobRunning(env.DB, job.id);
     await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`);
@@ -109,6 +111,7 @@ describe("home", () => {
       output_px: 400,
       num_frames: 2,
       scale_bar: false,
+      style: "carto",
     });
     await markJobRunning(env.DB, job.id);
     await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, `jobs/${job.id}/map.mp4`);
@@ -130,6 +133,7 @@ describe("home", () => {
       output_px: 400,
       num_frames: 2,
       scale_bar: false,
+      style: "carto",
     });
     await markJobRunning(env.DB, job.id);
     await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, `jobs/${job.id}/map.mp4`);
@@ -162,6 +166,7 @@ describe("home", () => {
       output_px: 400,
       num_frames: 2,
       scale_bar: false,
+      style: "carto",
     });
     await markJobRunning(env.DB, job.id, 1000);
     await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`, null, 1000 + 3600); // ran one hour
@@ -182,6 +187,7 @@ describe("home", () => {
       output_px: 400,
       num_frames: 2,
       scale_bar: false,
+      style: "carto",
     });
     await markJobRunning(env.DB, job.id);
     await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`);
@@ -211,6 +217,7 @@ describe("home", () => {
       output_px: 400,
       num_frames: 2,
       scale_bar: false,
+      style: "carto",
     });
     await markJobRunning(env.DB, mine.id);
     // Someone else's finished job.
@@ -356,6 +363,7 @@ describe("verify + submit", () => {
       output_px: 400,
       num_frames: 2,
       scale_bar: false,
+      style: "carto",
     });
     await markJobRunning(env.DB, job.id);
 
@@ -375,6 +383,7 @@ describe("scheduled submissions", () => {
     output_px: 400,
     num_frames: 2,
     scale_bar: false,
+    style: "carto",
   };
 
   it("defers a future-end-time submission instead of enqueuing it", async () => {
@@ -646,6 +655,7 @@ describe("internal job params", () => {
         output_px: 400,
         num_frames: 2,
         scale_bar: true,
+        style: "carto",
       },
       undefined,
       null,
