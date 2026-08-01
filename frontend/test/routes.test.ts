@@ -229,6 +229,27 @@ describe("home", () => {
     expect(html).toContain("Maps from others");
     expect(html).toContain(`/r/jobs/${theirs.id}/map.gif`); // others' finished map
   });
+
+  it("omits the hidden style field by default", async () => {
+    const { env: e } = testEnv();
+    const cookie = await sessionCookie(e, "me@example.com");
+    const html = await (await app.request("/", { headers: { cookie } }, e)).text();
+    expect(html).not.toContain('name="style"');
+  });
+
+  it("?style=americana adds a hidden style field submitting americana", async () => {
+    const { env: e } = testEnv();
+    const cookie = await sessionCookie(e, "me@example.com");
+    const html = await (await app.request("/?style=americana", { headers: { cookie } }, e)).text();
+    expect(html).toContain('<input type="hidden" name="style" value="americana">');
+  });
+
+  it("ignores an unrecognized ?style value", async () => {
+    const { env: e } = testEnv();
+    const cookie = await sessionCookie(e, "me@example.com");
+    const html = await (await app.request("/?style=bogus", { headers: { cookie } }, e)).text();
+    expect(html).not.toContain('name="style"');
+  });
 });
 
 describe("auth gating", () => {
