@@ -52,12 +52,14 @@ function osmBboxUrl(bbox: string): string {
   return `https://www.openstreetmap.org/?minlon=${l}&minlat=${b}&maxlon=${r}&maxlat=${t}&box=yes`;
 }
 
-/** The muted metadata line for a job page: bbox linked to OSM.org + a friendly UTC time range. */
+/** The muted metadata line for a job page: bbox linked to OSM.org + a friendly UTC time range,
+ * plus a style marker when the job used a non-default (non-Carto) style. */
 function jobMeta(job: Job): string {
+  const styleNote = job.style === "americana" ? " · Americana" : "";
   return (
     `<a href="${esc(osmBboxUrl(job.bbox))}" target="_blank" rel="noopener" ` +
     `title="View this area on OpenStreetMap">📍 ${esc(job.bbox)}</a>` +
-    ` · ${esc(fmtTimeRange(job.time_before, job.time_after))}`
+    ` · ${esc(fmtTimeRange(job.time_before, job.time_after))}${styleNote}`
   );
 }
 
@@ -503,6 +505,7 @@ ${costLine(job)}
     return layout(
       "Job failed",
       `<h1>Something went wrong</h1>
+<p class="muted">${jobMeta(job)}</p>
 <p class="error">${esc(job.error ?? "The render failed.")}</p>
 ${costLine(job)}
 <p><a href="/">Try again</a></p>`,

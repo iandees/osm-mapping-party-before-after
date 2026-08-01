@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, it, expect, vi, afterEach } from "vitest";
 import { app, dispatchDueJobs } from "../src/index";
 import type { Env } from "../src/env";
-import { createJob, createLoginToken, getJob, markJobDone, markJobRunning } from "../src/db";
+import { createJob, createLoginToken, getJob, markJobDone, markJobFailed, markJobRunning } from "../src/db";
 
 /** Log in as `email` and return the session cookie header value. */
 async function sessionCookie(e: Parameters<typeof app.request>[2], email: string): Promise<string> {
@@ -201,6 +201,56 @@ describe("home", () => {
     expect(html).toContain("1 Jan 2020 → 15 Jun 2024, 14:30 UTC");
     // the raw ISO timestamps are no longer shown
     expect(html).not.toContain("2024-06-15T14:30:00Z");
+  });
+
+  it("shows an Americana marker on the job page for an americana-style job", async () => {
+    const { env: e } = testEnv();
+    const job = await createJob(env.DB, {
+      email: "someone@example.com",
+      bbox: "-0.2,51.4,0,51.6",
+      time_before: "2020-01-01T00:00:00Z",
+      time_after: "2024-01-01T00:00:00Z",
+      zoom: 12,
+      output_px: 400,
+      num_frames: 2,
+      scale_bar: false,
+      style: "americana",
+    });
+    await markJobRunning(env.DB, job.id);
+    await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`);
+
+    const html = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
+    expect(html).toContain("· Americana");
+  });
+
+  it("shows no style marker on the job page for a carto-style job", async () => {
+    const { env: e } = testEnv();
+    const job = await doneJob("someone@example.com"); // doneJob() uses style: "carto"
+
+    const html = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
+    expect(html).not.toContain("Americana");
+  });
+
+  it("shows the bbox, time range, and style marker on a failed americana job's page", async () => {
+    const { env: e } = testEnv();
+    const job = await createJob(env.DB, {
+      email: "someone@example.com",
+      bbox: "-0.2,51.4,0,51.6",
+      time_before: "2020-01-01T00:00:00Z",
+      time_after: "2024-01-01T00:00:00Z",
+      zoom: 12,
+      output_px: 400,
+      num_frames: 2,
+      scale_bar: false,
+      style: "americana",
+    });
+    await markJobRunning(env.DB, job.id);
+    await markJobFailed(env.DB, job.id, "the render blew up");
+
+    const html = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
+    expect(html).toContain("Something went wrong");
+    expect(html).toContain("-0.2,51.4,0,51.6"); // bbox now shown on the failed page too
+    expect(html).toContain("· Americana");
   });
 
   it("shows a signed-in user their in-progress maps and others' finished maps", async () => {
