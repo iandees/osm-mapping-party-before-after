@@ -256,6 +256,7 @@ export function formPage(
   others: Job[] = [],
   error?: string,
   maxFutureHorizonDays: number = DEFAULT_MAX_FUTURE_HORIZON_DAYS,
+  style?: "americana",
 ): string {
   const head = `
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -268,6 +269,7 @@ export function formPage(
 <div class="userbar"><span class="muted">Signed in as ${esc(email)}</span><form method="post" action="/logout"><button class="linkbtn">Sign out</button></form></div>
 ${error ? `<p class="error">${esc(error)}</p>` : ""}
 <form method="post" action="/submit" id="jobform">
+  ${style === "americana" ? `<input type="hidden" name="style" value="americana">` : ""}
   <label>Area — draw a rectangle on the map</label>
   <div id="map"></div>
   <input type="hidden" name="bbox" id="bbox" required>
