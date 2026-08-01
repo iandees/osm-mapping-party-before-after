@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, it, expect, vi, afterEach } from "vitest";
 import { app, dispatchDueJobs } from "../src/index";
 import type { Env } from "../src/env";
-import { createJob, createLoginToken, getJob, markJobDone, markJobRunning } from "../src/db";
+import { createJob, createLoginToken, getJob, markJobDone, markJobFailed, markJobRunning } from "../src/db";
 
 /** Log in as `email` and return the session cookie header value. */
 async function sessionCookie(e: Parameters<typeof app.request>[2], email: string): Promise<string> {
@@ -203,6 +203,56 @@ describe("home", () => {
     expect(html).not.toContain("2024-06-15T14:30:00Z");
   });
 
+  it("shows an Americana marker on the job page for an americana-style job", async () => {
+    const { env: e } = testEnv();
+    const job = await createJob(env.DB, {
+      email: "someone@example.com",
+      bbox: "-0.2,51.4,0,51.6",
+      time_before: "2020-01-01T00:00:00Z",
+      time_after: "2024-01-01T00:00:00Z",
+      zoom: 12,
+      output_px: 400,
+      num_frames: 2,
+      scale_bar: false,
+      style: "americana",
+    });
+    await markJobRunning(env.DB, job.id);
+    await markJobDone(env.DB, job.id, `jobs/${job.id}/map.gif`);
+
+    const html = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
+    expect(html).toContain("· Americana");
+  });
+
+  it("shows no style marker on the job page for a carto-style job", async () => {
+    const { env: e } = testEnv();
+    const job = await doneJob("someone@example.com"); // doneJob() uses style: "carto"
+
+    const html = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
+    expect(html).not.toContain("Americana");
+  });
+
+  it("shows the bbox, time range, and style marker on a failed americana job's page", async () => {
+    const { env: e } = testEnv();
+    const job = await createJob(env.DB, {
+      email: "someone@example.com",
+      bbox: "-0.2,51.4,0,51.6",
+      time_before: "2020-01-01T00:00:00Z",
+      time_after: "2024-01-01T00:00:00Z",
+      zoom: 12,
+      output_px: 400,
+      num_frames: 2,
+      scale_bar: false,
+      style: "americana",
+    });
+    await markJobRunning(env.DB, job.id);
+    await markJobFailed(env.DB, job.id, "the render blew up");
+
+    const html = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
+    expect(html).toContain("Something went wrong");
+    expect(html).toContain("-0.2,51.4,0,51.6"); // bbox now shown on the failed page too
+    expect(html).toContain("· Americana");
+  });
+
   it("shows a signed-in user their in-progress maps and others' finished maps", async () => {
     const { env: e } = testEnv();
     const cookie = await sessionCookie(e, "me@example.com");
@@ -230,25 +280,12 @@ describe("home", () => {
     expect(html).toContain(`/r/jobs/${theirs.id}/map.gif`); // others' finished map
   });
 
-  it("omits the hidden style field by default", async () => {
+  it("renders the style dropdown with Carto selected by default", async () => {
     const { env: e } = testEnv();
     const cookie = await sessionCookie(e, "me@example.com");
     const html = await (await app.request("/", { headers: { cookie } }, e)).text();
-    expect(html).not.toContain('name="style"');
-  });
-
-  it("?style=americana adds a hidden style field submitting americana", async () => {
-    const { env: e } = testEnv();
-    const cookie = await sessionCookie(e, "me@example.com");
-    const html = await (await app.request("/?style=americana", { headers: { cookie } }, e)).text();
-    expect(html).toContain('<input type="hidden" name="style" value="americana">');
-  });
-
-  it("ignores an unrecognized ?style value", async () => {
-    const { env: e } = testEnv();
-    const cookie = await sessionCookie(e, "me@example.com");
-    const html = await (await app.request("/?style=bogus", { headers: { cookie } }, e)).text();
-    expect(html).not.toContain('name="style"');
+    expect(html).toContain('<option value="carto" selected>OpenStreetMap Carto</option>');
+    expect(html).toContain('<option value="americana">Americana</option>');
   });
 });
 
@@ -348,6 +385,40 @@ describe("verify + submit", () => {
     const status = await app.request(`/jobs/${jobId}/status`, {}, e);
     expect(status.status).toBe(200);
     expect(await status.json()).toMatchObject({ status: "queued" });
+  });
+
+  it("submits with style=americana and persists it", async () => {
+    const { env: e } = testEnv();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<ok/>", { status: 200 }));
+
+    const token = await createLoginToken(env.DB, "user@example.com", 900);
+    const verify = await app.request(`/verify/${token}`, {}, e);
+    const cookie = (verify.headers.get("set-cookie") ?? "").split(";")[0];
+
+    const submit = await app.request(
+      new Request("https://app.example.com/submit", {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          cookie,
+        },
+        body: new URLSearchParams({
+          bbox: "-0.2,51.4,0.0,51.6",
+          time_before: "2020-01-01T00:00",
+          time_after: "2024-01-01T00:00",
+          output_px: "800",
+          num_frames: "2",
+          style: "americana",
+        }).toString(),
+      }),
+      {},
+      e,
+    );
+    expect(submit.status).toBe(302);
+    const jobId = (submit.headers.get("location") ?? "").split("/").pop()!;
+
+    const job = await getJob(env.DB, jobId);
+    expect(job?.style).toBe("americana");
   });
 
   it("rejects an invalid job submission", async () => {

@@ -52,12 +52,14 @@ function osmBboxUrl(bbox: string): string {
   return `https://www.openstreetmap.org/?minlon=${l}&minlat=${b}&maxlon=${r}&maxlat=${t}&box=yes`;
 }
 
-/** The muted metadata line for a job page: bbox linked to OSM.org + a friendly UTC time range. */
+/** The muted metadata line for a job page: bbox linked to OSM.org + a friendly UTC time range,
+ * plus a style marker when the job used a non-default (non-Carto) style. */
 function jobMeta(job: Job): string {
+  const styleNote = job.style === "americana" ? " · Americana" : "";
   return (
     `<a href="${esc(osmBboxUrl(job.bbox))}" target="_blank" rel="noopener" ` +
     `title="View this area on OpenStreetMap">📍 ${esc(job.bbox)}</a>` +
-    ` · ${esc(fmtTimeRange(job.time_before, job.time_after))}`
+    ` · ${esc(fmtTimeRange(job.time_before, job.time_after))}${styleNote}`
   );
 }
 
@@ -256,7 +258,6 @@ export function formPage(
   others: Job[] = [],
   error?: string,
   maxFutureHorizonDays: number = DEFAULT_MAX_FUTURE_HORIZON_DAYS,
-  style?: "americana",
 ): string {
   const head = `
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -269,7 +270,6 @@ export function formPage(
 <div class="userbar"><span class="muted">Signed in as ${esc(email)}</span><form method="post" action="/logout"><button class="linkbtn">Sign out</button></form></div>
 ${error ? `<p class="error">${esc(error)}</p>` : ""}
 <form method="post" action="/submit" id="jobform">
-  ${style === "americana" ? `<input type="hidden" name="style" value="americana">` : ""}
   <label>Area — draw a rectangle on the map</label>
   <div id="map"></div>
   <input type="hidden" name="bbox" id="bbox" required>
@@ -314,6 +314,13 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
         <input id="scale_bar" name="scale_bar" type="checkbox" checked>
         Show scale bar
       </label>
+    </div>
+    <div>
+      <label for="style">Map style</label>
+      <select id="style" name="style">
+        <option value="carto" selected>OpenStreetMap Carto</option>
+        <option value="americana">Americana</option>
+      </select>
     </div>
   </div>
 
@@ -498,6 +505,7 @@ ${costLine(job)}
     return layout(
       "Job failed",
       `<h1>Something went wrong</h1>
+<p class="muted">${jobMeta(job)}</p>
 <p class="error">${esc(job.error ?? "The render failed.")}</p>
 ${costLine(job)}
 <p><a href="/">Try again</a></p>`,
