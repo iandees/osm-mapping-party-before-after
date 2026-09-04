@@ -287,6 +287,15 @@ describe("home", () => {
     expect(html).toContain('<option value="carto" selected>OpenStreetMap Carto</option>');
     expect(html).toContain('<option value="americana">Americana</option>');
   });
+
+  it("renders the location search box above the map", async () => {
+    const { env: e } = testEnv();
+    const cookie = await sessionCookie(e, "me@example.com");
+    const html = await (await app.request("/", { headers: { cookie } }, e)).text();
+    expect(html).toContain('id="locsearch"');
+    expect(html).toContain('id="locsearchbtn"');
+    expect(html.indexOf('id="locsearch"')).toBeLessThan(html.indexOf('id="map"'));
+  });
 });
 
 describe("auth gating", () => {
