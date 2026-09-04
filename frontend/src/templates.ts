@@ -482,6 +482,10 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
 
     searchStatus.textContent = 'Searching…';
     const osmRef = parseOsmRef(q);
+    // /lookup only returns objects Nominatim's index actually covers — those with a
+    // name, address, or other searchable importance. A valid but bare/untagged node,
+    // way, or relation (plain geometry) can legitimately come back empty; that's not
+    // a bug, it just isn't reachable this way, and the empty case is handled below.
     const url = osmRef
       ? 'https://nominatim.openstreetmap.org/lookup?osm_ids=' + osmRef + '&format=jsonv2'
       : 'https://nominatim.openstreetmap.org/search?q=' + encodeURIComponent(q) + '&format=jsonv2&limit=1';
