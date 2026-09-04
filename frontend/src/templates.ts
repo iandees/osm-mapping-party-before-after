@@ -90,6 +90,9 @@ function layout(title: string, body: string, head = ""): string {
   .presets { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0.5rem 0 0; }
   .presets a { display: inline-block; padding: 0.2rem 0.6rem; border: 1px solid #ccc; border-radius: 999px; font-size: 0.85rem; text-decoration: none; color: inherit; }
   .presets a:hover { border-color: #e6007e; color: #e6007e; }
+  .searchrow { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+  .searchrow input { flex: 1 1 auto; max-width: none; }
+  .searchrow button { margin-top: 0; }
   #map { height: 380px; margin-top: 0.5rem; border: 1px solid #ccc; }
   .result { max-width: 100%; border: 1px solid #ccc; margin: 0.5rem 0; display: block; }
   .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; margin: 1rem 0; }
@@ -271,6 +274,11 @@ export function formPage(
 ${error ? `<p class="error">${esc(error)}</p>` : ""}
 <form method="post" action="/submit" id="jobform">
   <label>Area — draw a rectangle on the map</label>
+  <div class="searchrow">
+    <input type="text" id="locsearch" placeholder="Or search a place, paste coordinates (lat,lon), or an OSM node/way/relation" autocomplete="off">
+    <button type="button" id="locsearchbtn">Find</button>
+  </div>
+  <p class="muted" id="locsearchstatus"></p>
   <div id="map"></div>
   <input type="hidden" name="bbox" id="bbox" required>
   <p class="muted" id="bboxlabel">No area selected yet.</p>
@@ -424,6 +432,80 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
       } catch (e) { /* best-effort: leave the field as-is */ }
     }, 500);
   }
+
+  // Free-text location search: accepts a place name, "lat,lon" coordinates, or an
+  // OSM node/way/relation reference (id, "way/123", or an openstreetmap.org URL).
+  // Coordinates just re-center the map; a place/OSM match auto-draws its bbox
+  // through the same setBbox() path a hand-drawn rectangle uses.
+  const searchInput = document.getElementById('locsearch');
+  const searchStatus = document.getElementById('locsearchstatus');
+  let searchAbort = null;
+
+  function parseCoords(q) {
+    const m = /^\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*$/.exec(q);
+    if (!m) return null;
+    const lat = Number(m[1]), lon = Number(m[2]);
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+    return [lat, lon];
+  }
+
+  function parseOsmRef(q) {
+    const urlMatch = /openstreetmap\\.org\\/(node|way|relation)\\/(\\d+)/i.exec(q);
+    const kinds = { node: 'N', n: 'N', way: 'W', w: 'W', relation: 'R', r: 'R' };
+    if (urlMatch) return kinds[urlMatch[1].toLowerCase()] + urlMatch[2];
+    // A bare single-letter prefix (n/w/r) only counts when it's the WHOLE input —
+    // otherwise ordinary search text like "N1 postcode" would be misread as node 1.
+    const m = /^(node|way|relation|n|w|r)[\\s\\/:]*(\\d+)$/i.exec(q.trim());
+    if (!m) return null;
+    return kinds[m[1].toLowerCase()] + m[2];
+  }
+
+  // Nominatim's boundingbox is [south, north, west, east]; build a rectangle from it.
+  function bboxToRect(bb) {
+    const south = Number(bb[0]), north = Number(bb[1]), west = Number(bb[2]), east = Number(bb[3]);
+    return L.rectangle([[south, west], [north, east]], { color: '#e6007e' });
+  }
+
+  async function runSearch() {
+    const q = searchInput.value.trim();
+    if (!q) return;
+    if (searchAbort) searchAbort.abort();
+    searchAbort = new AbortController();
+
+    const coords = parseCoords(q);
+    if (coords) {
+      map.setView(coords, 14);
+      searchStatus.textContent = 'Centered on ' + coords[0].toFixed(5) + ', ' + coords[1].toFixed(5) +
+        ' — draw a rectangle for the area.';
+      return;
+    }
+
+    searchStatus.textContent = 'Searching…';
+    const osmRef = parseOsmRef(q);
+    const url = osmRef
+      ? 'https://nominatim.openstreetmap.org/lookup?osm_ids=' + osmRef + '&format=jsonv2'
+      : 'https://nominatim.openstreetmap.org/search?q=' + encodeURIComponent(q) + '&format=jsonv2&limit=1';
+    try {
+      const r = await fetch(url, { signal: searchAbort.signal, headers: { accept: 'application/json' } });
+      if (!r.ok) { searchStatus.textContent = 'Search failed — try again.'; return; }
+      const results = await r.json();
+      const result = Array.isArray(results) ? results[0] : results;
+      if (!result || !result.boundingbox) {
+        searchStatus.textContent = osmRef ? 'No OSM object found for "' + q + '".' : 'No place found for "' + q + '".';
+        return;
+      }
+      const rect = bboxToRect(result.boundingbox);
+      setBbox(rect);
+      map.fitBounds(rect.getBounds());
+      searchStatus.textContent = 'Found: ' + (result.display_name || q) + ' — you can redraw the rectangle to adjust it.';
+    } catch (e) {
+      if (e.name !== 'AbortError') searchStatus.textContent = 'Search failed — try again.';
+    }
+  }
+  document.getElementById('locsearchbtn').addEventListener('click', runSearch);
+  searchInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); runSearch(); }
+  });
 
   // Format a Date as the local value a datetime-local input expects (YYYY-MM-DDTHH:MM).
   function toLocalInput(d) {
