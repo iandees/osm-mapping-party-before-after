@@ -5,6 +5,7 @@ compatibility_flags = ["nodejs_compat"]
 
 # Public, non-secret configuration. Secrets are set with `wrangler secret put`:
 #   SECRET_KEY, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, CALLBACK_SECRET
+# Optional: SLACK_WEBHOOK_URL (job success/failure notifications; skipped when unset)
 [vars]
 PUBLIC_BASE_URL = "https://beforeafter.mapki.com"
 MAIL_FROM = "ian@mapki.com"
