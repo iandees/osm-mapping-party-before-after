@@ -19,9 +19,11 @@ from __future__ import annotations  # base image is Python 3.9; keep `X | None` 
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
@@ -156,6 +158,28 @@ def oldest_data_timestamp(path: str) -> datetime | None:
     return _parse_iso(out) if out else None
 
 
+def download_valid_region_file(url: str, dest: str, worker: "Worker") -> None:
+    """Download a region history file and validate it, retrying on failure.
+
+    Geofabrik rewrites these files in place, and a download that lands mid-rewrite can
+    get a 404, an error page, or a header-only file. Those clear up within minutes, so
+    retry (with a fresh cookie each time) before failing the job.
+    """
+    attempts = int(env("REGION_DOWNLOAD_ATTEMPTS", "3"))
+    delay = int(env("REGION_DOWNLOAD_RETRY_SECONDS", "120"))
+    for attempt in range(1, attempts + 1):
+        try:
+            download_from_geofabrik(url, dest)
+            validate_history_file(dest)
+            return
+        except (requests.RequestException, RuntimeError) as e:
+            if attempt == attempts:
+                raise
+            print(f"region download attempt {attempt}/{attempts} failed: {e}; retrying in {delay}s")
+            worker.progress("Map data is being refreshed upstream; retrying…")
+            time.sleep(delay)
+
+
 def ensure_region_file(feature: dict, time_after: str, worker: "Worker") -> str:
     """Return a local path to the region's history file, using an S3 cache.
 
@@ -198,12 +222,15 @@ def ensure_region_file(feature: dict, time_after: str, worker: "Worker") -> str:
               f"refreshing from Geofabrik")
 
     worker.progress("Downloading map history for the region…")
-    download_from_geofabrik(history_url, local)
-    # Validate before caching so a bad download fails this job instead of poisoning
-    # the cache for every later job in the region.
-    validate_history_file(local)
+    # Validated before caching so a bad download can't poison the cache for every
+    # later job in the region.
+    download_valid_region_file(history_url, local, worker)
     s3.upload_file(local, bucket, cache_key)
     return local
+
+
+# e.g. "  Processed 1234 nodes in 0s - 1234/s" in osm2pgsql's import summary.
+OSM2PGSQL_PROCESSED = re.compile(r"Processed (\d+) (?:nodes|ways|relations) in ")
 
 
 def run_make(history_file: str, params: dict, worker: "Worker") -> None:
@@ -235,9 +262,15 @@ def run_make(history_file: str, params: dict, worker: "Worker") -> None:
     )
     extracted = 0
     imported = 0
+    osm2pgsql_objects = 0  # nodes+ways+relations imported across all frames
+    osm2pgsql_runs = 0
     assert proc.stdout is not None
     for line in proc.stdout:
         print(line.rstrip())  # keep full output in CloudWatch
+        m = OSM2PGSQL_PROCESSED.search(line)
+        if m:
+            osm2pgsql_objects += int(m.group(1))
+            osm2pgsql_runs += 1
         if line.startswith("Extracting data for"):
             extracted += 1
             worker.progress(f"Extracting frame {extracted}/{n}…")
@@ -251,6 +284,10 @@ def run_make(history_file: str, params: dict, worker: "Worker") -> None:
     rc = proc.wait()
     if rc != 0:
         raise RuntimeError(f"make.sh exited with code {rc}")
+    # Every frame imported zero objects: there is nothing to draw, and the GIF would
+    # just be blank backgrounds. Fail with a clear message instead.
+    if osm2pgsql_runs and osm2pgsql_objects == 0:
+        raise RuntimeError("no OpenStreetMap data found in the selected area and time range")
 
 
 def upload_results(job_id: str) -> dict[str, str]:

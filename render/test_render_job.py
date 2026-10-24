@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import requests
+
 import render_job
 
 
@@ -59,11 +61,37 @@ class EnsureRegionFileTests(unittest.TestCase):
     def test_bad_download_is_not_cached(self):
         with mock.patch("boto3.client") as client, \
              mock.patch.object(render_job, "download_from_geofabrik", side_effect=self._download), \
-             mock.patch.object(render_job, "newest_data_timestamp", return_value=None):
+             mock.patch.object(render_job, "newest_data_timestamp", return_value=None), \
+             mock.patch("time.sleep"):
             client.return_value.download_file.side_effect = Exception("miss")
             with self.assertRaisesRegex(RuntimeError, "no map data"):
                 render_job.ensure_region_file(self.FEATURE, "2026-10-19T00:00:00Z", self.worker)
             client.return_value.upload_file.assert_not_called()
+
+    def test_download_is_retried_until_it_validates(self):
+        good = render_job._parse_iso("2026-10-19T00:00:00Z")
+        responses = [requests.HTTPError("404 Not Found"), None, None]
+        newest = [None, good]  # 2nd attempt downloads header-only, 3rd is good
+
+        def download(url, dest):
+            r = responses.pop(0)
+            if r:
+                raise r
+            self._download(url, dest)
+
+        with mock.patch.object(render_job, "download_from_geofabrik", side_effect=download) as dl, \
+             mock.patch.object(render_job, "newest_data_timestamp", side_effect=newest), \
+             mock.patch("time.sleep") as sleep:
+            render_job.download_valid_region_file("https://h/x.osh.pbf", os.path.join(self.tmp.name, "x"), self.worker)
+        self.assertEqual(dl.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_download_gives_up_after_max_attempts(self):
+        with mock.patch.object(render_job, "download_from_geofabrik", side_effect=requests.HTTPError("404")) as dl, \
+             mock.patch("time.sleep"):
+            with self.assertRaises(requests.HTTPError):
+                render_job.download_valid_region_file("https://h/x.osh.pbf", os.path.join(self.tmp.name, "x"), self.worker)
+        self.assertEqual(dl.call_count, 3)
 
     def test_unreadable_cache_entry_is_redownloaded_and_replaced(self):
         good = render_job._parse_iso("2026-10-19T00:00:00Z")
@@ -74,6 +102,32 @@ class EnsureRegionFileTests(unittest.TestCase):
             render_job.ensure_region_file(self.FEATURE, "2026-10-19T00:00:00Z", self.worker)
             dl.assert_called_once()
             client.return_value.upload_file.assert_called_once()
+
+
+class RunMakeEmptyAreaTests(unittest.TestCase):
+    PARAMS = {"zoom": 12, "num_frames": 2, "time_before": "a", "time_after": "b", "bbox": "0,0,1,1"}
+
+    def _run(self, lines, rc=0):
+        proc = mock.Mock()
+        proc.stdout = iter(lines)
+        proc.wait.return_value = rc
+        with mock.patch("subprocess.Popen", return_value=proc):
+            render_job.run_make("h.osh.pbf", self.PARAMS, mock.Mock())
+
+    def test_fails_when_every_frame_imports_zero_objects(self):
+        lines = [f"2026-10-19 13:10:46    Processed 0 {k} in 0s - 0/s\n" for k in ("nodes", "ways", "relations")] * 2
+        with self.assertRaisesRegex(RuntimeError, "no OpenStreetMap data"):
+            self._run(lines)
+
+    def test_passes_when_any_frame_has_data(self):
+        lines = [
+            "  Processed 0 nodes in 0s - 0/s\n",
+            "  Processed 1234 nodes in 1s - 1234/s\n",
+        ]
+        self._run(lines)
+
+    def test_passes_when_no_osm2pgsql_summary_was_seen(self):
+        self._run(["Generating zoom 12\n"])
 
 
 class UploadResultsTests(unittest.TestCase):
