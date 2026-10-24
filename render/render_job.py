@@ -123,6 +123,26 @@ def newest_data_timestamp(path: str) -> datetime | None:
     return _parse_iso(out) if out else None
 
 
+def validate_history_file(path: str) -> datetime:
+    """Return the newest data timestamp of a downloaded history file, or raise.
+
+    Geofabrik can answer 200 with a body that is not a usable extract — the OSM
+    login page when the OAuth cookie is rejected, or a header-only PBF with no
+    objects. Neither is caught by ``raise_for_status``, and caching one would poison
+    every later job for that region (blank renders, or osmium failures).
+    """
+    size = os.path.getsize(path)
+    try:
+        newest = newest_data_timestamp(path)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            f"downloaded region file is not a readable OSM history file ({size} bytes)"
+        ) from e
+    if newest is None:
+        raise RuntimeError(f"downloaded region file contains no map data ({size} bytes)")
+    return newest
+
+
 def oldest_data_timestamp(path: str) -> datetime | None:
     """The oldest object timestamp contained in a history file, via osmium.
 
@@ -165,7 +185,11 @@ def ensure_region_file(feature: dict, time_after: str, worker: "Worker") -> str:
         print(f"region cache miss for {cache_key}")
 
     if cached:
-        newest = newest_data_timestamp(local)
+        try:
+            newest = newest_data_timestamp(local)
+        except subprocess.CalledProcessError:
+            print(f"region cache holds an unreadable file, discarding: {cache_key}")
+            newest = None
         if newest is not None and newest >= threshold:
             print(f"region cache fresh enough (data through {newest.isoformat()}, "
                   f"threshold {threshold.isoformat()}): {cache_key}")
@@ -175,6 +199,9 @@ def ensure_region_file(feature: dict, time_after: str, worker: "Worker") -> str:
 
     worker.progress("Downloading map history for the region…")
     download_from_geofabrik(history_url, local)
+    # Validate before caching so a bad download fails this job instead of poisoning
+    # the cache for every later job in the region.
+    validate_history_file(local)
     s3.upload_file(local, bucket, cache_key)
     return local
 
