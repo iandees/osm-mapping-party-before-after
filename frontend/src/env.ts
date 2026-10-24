@@ -36,8 +36,12 @@ export interface Env {
   AWS_ACCESS_KEY_ID: string;
   AWS_SECRET_ACCESS_KEY: string;
   CALLBACK_SECRET: string;
+  // Optional Slack incoming-webhook URL; job success/failure notifications are skipped when unset.
+  SLACK_WEBHOOK_URL?: string;
 
   // Vars
+  // Set to "false" to post only failures to Slack (default: successes too).
+  SLACK_NOTIFY_SUCCESS?: string;
   PUBLIC_BASE_URL: string;
   MAIL_FROM: string;
   AWS_REGION: string;

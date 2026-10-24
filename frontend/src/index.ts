@@ -30,6 +30,7 @@ import {
 import { DEFAULT_MAX_FUTURE_HORIZON_DAYS, isValidEmail, validateJobInput } from "./validation";
 import { enqueueRenderJob } from "./aws";
 import { sendFailureEmail, sendLoginEmail, sendResultEmail } from "./email";
+import { notifySlack } from "./slack";
 import { aboutPage, checkEmailPage, formPage, jobPage, loginPage } from "./templates";
 
 type Vars = { email: string };
@@ -227,6 +228,7 @@ app.post("/internal/jobs/:id", async (c) => {
         } catch (e) {
           console.error("failure email failed", e);
         }
+        await notifySlack(c.env, job, "failed");
       }
     }
     return c.json({ ok: true });
@@ -242,6 +244,7 @@ app.post("/internal/jobs/:id", async (c) => {
         } catch (e) {
           console.error("result email failed", e);
         }
+        await notifySlack(c.env, job, "done");
       }
     }
     return c.json({ ok: true });
@@ -285,6 +288,8 @@ async function reapStuckJobs(env: Env): Promise<void> {
     } catch (e) {
       console.error("reaper failure email failed", e);
     }
+    const job = await getJob(env.DB, j.id);
+    if (job) await notifySlack(env, job, "failed");
   }
   if (failed.length) console.log(`reaped ${failed.length} stuck job(s)`);
 }
@@ -310,6 +315,8 @@ export async function dispatchDueJobs(env: Env): Promise<void> {
       } catch (e2) {
         console.error("dispatch failure email failed", e2);
       }
+      const failedJob = await getJob(env.DB, job.id);
+      if (failedJob) await notifySlack(env, failedJob, "failed");
     }
   }
   if (dispatched) console.log(`dispatched ${dispatched} scheduled job(s)`);

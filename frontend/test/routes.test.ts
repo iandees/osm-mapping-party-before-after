@@ -709,6 +709,35 @@ describe("internal callbacks", () => {
     expect(emailSend).toHaveBeenCalledOnce();
   });
 
+  it("notifies Slack on done and failed callbacks when a webhook is configured", async () => {
+    const { env: e } = testEnv({ SLACK_WEBHOOK_URL: "https://hooks.slack.test/abc" });
+    const post = (id: string, body: object) =>
+      app.request(
+        new Request(`https://app.example.com/internal/jobs/${id}`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-callback-secret": "callback-secret" },
+          body: JSON.stringify(body),
+        }),
+        {},
+        e,
+      );
+    const okJob = await makeJob();
+    const badJob = await makeJob();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("ok"));
+    for (const id of [okJob, badJob]) await post(id, { status: "running" });
+
+    await post(okJob, { status: "done", resultKey: `jobs/${okJob}/` });
+    await post(badJob, { status: "failed", error: "no data" });
+
+    const texts = fetchSpy.mock.calls
+      .filter(([url]) => url === "https://hooks.slack.test/abc")
+      .map(([, init]) => JSON.parse((init as RequestInit).body as string).text as string);
+    expect(texts).toHaveLength(2);
+    expect(texts[0]).toContain(`Map ready: <https://app.example.com/jobs/${okJob}|`);
+    expect(texts[1]).toContain("Map failed");
+    expect(texts[1]).toContain("Error: no data");
+  });
+
   it("persists an mp4 key from the done callback when present", async () => {
     const { env: e } = testEnv();
     const id = await makeJob();
