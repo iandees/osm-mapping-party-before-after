@@ -56,8 +56,8 @@ RUN curl -fsSL -o /tmp/country_osm_grid.sql \
 # residual risk since sprites/glyphs are simple binary assets that change far
 # less often than style/shield logic.
 FROM curlimages/curl:8.11.1 AS americana_style_build
-ARG AMERICANA_STYLE_SHA256=4df2fa443587642fd9dc428072062d5f7cd1f34a7dfb324b59437ede98a05943
-ARG AMERICANA_SHIELDS_SHA256=aaf72a3113739377b88ad7cfd7d85cd3c22881e3955a85f8b8416a76869a2fcc
+ARG AMERICANA_STYLE_SHA256=767c64178ae22f4a6c755fe279d280a93be8ea0e116ffa3a9ef3b0b7a7271c66
+ARG AMERICANA_SHIELDS_SHA256=6d58f0aee1d5f262f31029f978dce11616f3dbefce3eb9966e3e2bd49c8d6464
 RUN curl -fsSL -o /tmp/style.json https://americanamap.org/style.json \
  && echo "${AMERICANA_STYLE_SHA256}  /tmp/style.json" | sha256sum -c - \
  && curl -fsSL -o /tmp/shields.json https://americanamap.org/shields.json \
