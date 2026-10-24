@@ -296,6 +296,27 @@ describe("home", () => {
     expect(html).toContain('id="locsearchbtn"');
     expect(html.indexOf('id="locsearch"')).toBeLessThan(html.indexOf('id="map"'));
   });
+
+  it("the location search parses a left,bottom,right,top bbox", async () => {
+    const { env: e } = testEnv();
+    const cookie = await sessionCookie(e, "me@example.com");
+    const html = await (await app.request("/", { headers: { cookie } }, e)).text();
+    // Pull parseBbox out of the page's inline script and run it for real.
+    const src = /function parseBbox\(q\) \{[\s\S]*?\n  \}\n/.exec(html)?.[0];
+    expect(src).toBeTruthy();
+    const parseBbox = new Function(`${src}; return parseBbox;`)() as (q: string) => number[] | null;
+
+    expect(parseBbox("15.1901,41.05169,15.20907,41.06362")).toEqual([15.1901, 41.05169, 15.20907, 41.06362]);
+    expect(parseBbox("  -3.4 50.6 -3.3 50.7 ")).toEqual([-3.4, 50.6, -3.3, 50.7]); // whitespace, negatives
+    expect(parseBbox("-3.4, 50.6, -3.3, 50.7")).toEqual([-3.4, 50.6, -3.3, 50.7]); // comma + space
+    expect(parseBbox("51.5,-0.1")).toBeNull(); // lat,lon pair is handled elsewhere
+    expect(parseBbox("1,2,3")).toBeNull();
+    expect(parseBbox("a,b,c,d")).toBeNull();
+    expect(parseBbox("15.2,41.06,15.19,41.05")).toBeNull(); // left >= right
+    expect(parseBbox("15.1,41.06,15.2,41.05")).toBeNull(); // bottom >= top
+    expect(parseBbox("-181,0,0,1")).toBeNull(); // longitude out of range
+    expect(parseBbox("0,-91,1,0")).toBeNull(); // latitude out of range
+  });
 });
 
 describe("auth gating", () => {
