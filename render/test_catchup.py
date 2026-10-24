@@ -214,6 +214,26 @@ class OrchestrationTests(unittest.TestCase):
         self.assertIn("osmosis_replication_timestamp=2024-05-01T00:00:00Z", cat_calls[0])
         self.assertTrue(result.endswith("catchup_updated_global.osh.pbf"))
 
+    def test_osmupdate_real_failure_raises(self):
+        def run(cmd, **kw):
+            self.calls.append(cmd)
+            if "-o" in cmd and cmd[0] == "osmium":
+                open(cmd[cmd.index("-o") + 1], "a").close()
+            if cmd[0] == "osmupdate":
+                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="Old OSM file does not contain a timestamp")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with self.assertRaisesRegex(RuntimeError, r"osmupdate \(global\) failed \(rc=1\).*timestamp"):
+            catchup.bring_bbox_up_to_date(
+                self.region,
+                "-1,50,0,51",
+                "2024-01-01T00:00:00Z",
+                self.tmp,
+                run=run,
+                newest=self._newest(datetime(2020, 1, 1, tzinfo=UTC)),
+                head=self._head({}),
+            )
+
     def test_osmupdate_no_new_data_returns_bbox_extract(self):
         def run(cmd, **kw):
             self.calls.append(cmd)
