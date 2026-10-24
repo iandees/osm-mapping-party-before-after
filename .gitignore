@@ -12,3 +12,8 @@ __pycache__/
 
 .DS_Store
 .idea/
+
+# Local secrets
+.env
+.env.*
+!.env.example

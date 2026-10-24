@@ -37,7 +37,8 @@ Degrades gracefully: if the base already covers ``time_after`` we return it
 untouched (make.sh does its own bbox extract); if a region has no ``updates_url`` we
 skip straight to the global stream (the old behaviour); if replication hasn't
 reached ``time_after`` yet, we apply the best available and log it; if ``osmupdate``
-finds nothing new on a stream, that pass is a no-op.
+reports a stream is already up to date, that pass is a no-op. A real ``osmupdate``
+failure raises, so the job fails instead of rendering without the recent edits.
 """
 
 from __future__ import annotations  # base image is Python 3.9; keep `X | None` lazy
@@ -49,6 +50,10 @@ from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
 DEFAULT_REPLICATION_URL = "https://planet.openstreetmap.org/replication"
+
+# osmupdate's exit code for "Your OSM file is already up-to-date." Any other nonzero
+# code is a real failure (unreachable server, file without a replication timestamp…).
+OSMUPDATE_UP_TO_DATE = 21
 
 # subprocess.run-compatible callable; injected in tests.
 Runner = Callable[..., "subprocess.CompletedProcess"]
@@ -213,19 +218,23 @@ def _replication_pass(
     """Run one osmupdate→clip→apply pass against ``base_url``; return the updated file.
 
     ``in_file`` must already carry the ``osmosis_replication_timestamp`` header that
-    tells osmupdate where to resume. If osmupdate finds nothing new (or can't reach
-    the server), the pass is a no-op and ``in_file`` is returned unchanged.
+    tells osmupdate where to resume. If osmupdate reports the file is already up to
+    date, the pass is a no-op and ``in_file`` is returned unchanged; any other osmupdate
+    failure raises.
     """
     tmp_dir = os.path.join(workdir, f"osmupdate_tmp_{tag}")
     os.makedirs(tmp_dir, exist_ok=True)
     changes_file = os.path.join(workdir, f"catchup_changes_{tag}.osc.gz")
     _remove(changes_file)
     proc = run(osmupdate_cmd(in_file, changes_file, tmp_dir, base_url), capture_output=True, text=True)
-    if proc.returncode != 0 or not os.path.exists(changes_file) or os.path.getsize(changes_file) == 0:
-        # osmupdate reports "already up-to-date" (or fails to reach the server) →
-        # nothing to apply on this stream. Proceed with what we have.
-        stderr = (getattr(proc, "stderr", "") or "").strip()
-        print(f"osmupdate ({tag}) produced no changes (rc={proc.returncode}); using data as-is. {stderr}")
+    stderr = (getattr(proc, "stderr", "") or "").strip()
+    if proc.returncode not in (0, OSMUPDATE_UP_TO_DATE):
+        # A real failure — carrying on would quietly drop the recent edits the user
+        # asked to see, so fail the job instead.
+        raise RuntimeError(f"osmupdate ({tag}) failed (rc={proc.returncode}): {stderr[-300:]}")
+    if proc.returncode == OSMUPDATE_UP_TO_DATE or not os.path.exists(changes_file) or os.path.getsize(changes_file) == 0:
+        # Already up to date → nothing to apply on this stream. Proceed with what we have.
+        print(f"osmupdate ({tag}) found no new changes (rc={proc.returncode}); using data as-is")
         return in_file
 
     local_changes = os.path.join(workdir, f"catchup_changes_{tag}.local.osc.gz")
