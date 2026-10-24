@@ -275,7 +275,7 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
 <form method="post" action="/submit" id="jobform">
   <label>Area — draw a rectangle on the map</label>
   <div class="searchrow">
-    <input type="text" id="locsearch" placeholder="Or search a place, paste coordinates (lat,lon), or an OSM node/way/relation" autocomplete="off">
+    <input type="text" id="locsearch" placeholder="Or search a place, paste coordinates (lat,lon) or a bbox (left,bottom,right,top), or an OSM node/way/relation" autocomplete="off">
     <button type="button" id="locsearchbtn">Find</button>
   </div>
   <p class="muted" id="locsearchstatus"></p>
@@ -449,6 +449,18 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
     return [lat, lon];
   }
 
+  // "left,bottom,right,top" (lon,lat,lon,lat) — the same order the form shows under the
+  // map and sends to the server. Commas and/or whitespace both work as separators.
+  // Returns [left, bottom, right, top], or null when the text isn't a valid bbox.
+  function parseBbox(q) {
+    const parts = q.trim().split(/[\\s,;]+/);
+    if (parts.length !== 4 || !parts.every(p => /^-?\\d+(?:\\.\\d+)?$/.test(p))) return null;
+    const [left, bottom, right, top] = parts.map(Number);
+    if (!(left >= -180 && right <= 180 && left < right)) return null;
+    if (!(bottom >= -90 && top <= 90 && bottom < top)) return null;
+    return [left, bottom, right, top];
+  }
+
   function parseOsmRef(q) {
     const urlMatch = /openstreetmap\\.org\\/(node|way|relation)\\/(\\d+)/i.exec(q);
     const kinds = { node: 'N', n: 'N', way: 'W', w: 'W', relation: 'R', r: 'R' };
@@ -471,6 +483,15 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
     if (!q) return;
     if (searchAbort) searchAbort.abort();
     searchAbort = new AbortController();
+
+    const bb = parseBbox(q);
+    if (bb) {
+      const rect = L.rectangle([[bb[1], bb[0]], [bb[3], bb[2]]], { color: '#e6007e' });
+      setBbox(rect);
+      map.fitBounds(rect.getBounds());
+      searchStatus.textContent = 'Area set from the bounding box — you can redraw the rectangle to adjust it.';
+      return;
+    }
 
     const coords = parseCoords(q);
     if (coords) {
