@@ -36,32 +36,18 @@ RUN curl -fsSL -o /tmp/country_osm_grid.sql \
  && gzip -9 /tmp/country_osm_grid.sql
 
 # browser-entry.js used to fetch style.json/shields.json live from
-# americanamap.org on every single frame render. Unlike everything else in
-# this pipeline (which pins exact versions/commits/checksums — even
-# country_osm_grid.sql above gets a pinned commit + checksum), that was a
-# live, unversioned dependency: an upstream outage or breaking schema change
-# would break every future render with no rollback, and it made historic
-# renders non-reproducible (a "2015" render used whatever today's style
-# happened to be, not any particular pinned version). Fetch and pin them here
-# at image-build time instead. Unlike country_osm_grid.sql there is no
-# commit-pinned mirror to fetch instead — these are server-rendered outputs,
-# not files tracked in a git repo — so this can only pin by
-# checksum-at-fetch-time, not by commit too. That's still enough: any future
-# upstream change now requires deliberately re-fetching and bumping the
-# checksum ARGs below (a loud, reviewed build failure) instead of silently
-# being picked up by every future render. Scoped narrowly to just these two
-# JSON files, which define the actual style/shield logic — the sprite sheet
-# and font/glyph URLs referenced *inside* style.json are left as live
-# references to americanamap.org's CDN, a much smaller, more acceptable
-# residual risk since sprites/glyphs are simple binary assets that change far
-# less often than style/shield logic.
+# americanamap.org on every single frame render, so an upstream outage or
+# breaking change would break every render, and the style could change
+# between the frames of a single job. Fetch them here at image-build time
+# instead, so each image bakes in one consistent snapshot of the style.
+# They are deliberately not checksum-pinned: americanamap.org has no
+# versioned URL for these files, so a pin only turned every upstream change
+# into a broken build. A rebuild picks up the current style. The sprite
+# sheet and font/glyph URLs referenced *inside* style.json are left as live
+# references to americanamap.org's CDN.
 FROM curlimages/curl:8.11.1 AS americana_style_build
-ARG AMERICANA_STYLE_SHA256=4df2fa443587642fd9dc428072062d5f7cd1f34a7dfb324b59437ede98a05943
-ARG AMERICANA_SHIELDS_SHA256=aaf72a3113739377b88ad7cfd7d85cd3c22881e3955a85f8b8416a76869a2fcc
 RUN curl -fsSL -o /tmp/style.json https://americanamap.org/style.json \
- && echo "${AMERICANA_STYLE_SHA256}  /tmp/style.json" | sha256sum -c - \
- && curl -fsSL -o /tmp/shields.json https://americanamap.org/shields.json \
- && echo "${AMERICANA_SHIELDS_SHA256}  /tmp/shields.json" | sha256sum -c -
+ && curl -fsSL -o /tmp/shields.json https://americanamap.org/shields.json
 
 FROM openmaptiles/openmaptiles-tools:7.2 AS openmaptiles_build
 ARG OPENMAPTILES_COMMIT=6c11838d38030148832c039c2ea367274db86a87
