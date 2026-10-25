@@ -1,10 +1,14 @@
 # Mapping party before–after
 
-Make a image of OSM data of an area from 2 dates, showing what was changed.
+Make an image (or animated GIF) of OSM data of an area from 2 dates, showing what was changed.
 
-You can either install the necessary dependencies on your computer or run the script via Docker (both via MyBinder or in a local container).
+> This repo is a fork of [`amandasaurus/osm-mapping-party-before-after`](https://github.com/amandasaurus/osm-mapping-party-before-after) that adds a web frontend, available at <https://beforeafter.mapki.com>. Make sure you clone **this** repo (<https://github.com/iandees/osm-mapping-party-before-after>) when following the instructions below, since they don't apply to the upstream one.
 
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/amandasaurus/osm-mapping-party-before-after/main?labpath=make-images.ipynb)
+There are three ways to use it:
+
+1. **Hosted web app** – draw a box, pick two dates, get a GIF by email: <https://beforeafter.mapki.com>. See [WEBAPP.md](./WEBAPP.md) for how it is built and deployed.
+2. **Docker** (recommended for running it yourself) – see [below](#running-with-docker).
+3. **Local installation** – install the dependencies yourself and run `make.sh`.
 
 ## Making a local Installation
 
@@ -26,26 +30,20 @@ You can either install the necessary dependencies on your computer or run the sc
    ```
 1. Clone this repo:
    ```bash
-   git clone --recurse-submodules https://github.com/amandasaurus/osm-mapping-party-before-after
+   git clone --recurse-submodules https://github.com/iandees/osm-mapping-party-before-after
    cd osm-mapping-party-before-after
    ```
 
-## Use via Docker or MyBinder
+## Running with Docker
 
-If you do not want to install the whole pipeline yourself, you can run this setup in a Docker container that is ready-to-use and that can also run in the free-to-use open source cloud infrastructure of _MyBinder_. 
-
-If you want to use the _MyBinder_ version, [click here and wait a bit](https://mybinder.org/v2/gh/amandasaurus/osm-mapping-party-before-after/main?labpath=make-images.ipynb). This will launch the version online in a virtual machine and lets you interact with the code through a small Python notebook that will launch automatically and contains all necessary instructions.
-
-The MyBinder version has two drawbacks: 1. You will have to upload the OSM history file (_\*.osh.pbf_) into the container. Depending on the region of interest these can be quite large. 2. Creating the maps will take longer, as other external downloads will have to be downloaded on the fly. See [this blog post for more details](https://tzovar.as/map-comparisons/).
-
-If you want to run the Docker image on your own computer, the necessary image is available in the GitHub Container registry under [`amandasaurus/osm-mapping-party-before-after`](https://github.com/amandasaurus/osm-mapping-party-before-after/pkgs/container/osm-mapping-party-before-after). 
+The pipeline and all of its dependencies are packaged in the `Dockerfile` in this repo. There is no prebuilt public image, so build it locally (the base image is `amd64`-only; on Apple Silicon add `--platform linux/amd64` to the `docker build` command below).
 
 ### Building the Docker container from scratch
 
-Alternatively, you can also build the container locally if you want to make changes to it/improve it: We start by cloning this repository:
+Start by cloning this repository:
 
 ```bash
-git clone --recurse-submodules https://github.com/amandasaurus/osm-mapping-party-before-after
+git clone --recurse-submodules https://github.com/iandees/osm-mapping-party-before-after
 cd osm-mapping-party-before-after
 git submodule init
 git submodule update
@@ -107,4 +105,4 @@ If you have tile-building setup on your computer, you can run `make.sh` without 
 
 ## Copyright & Licence
 
-Copyright © 2021, Affero GPL v3+ (see [LICENCE](./LICENCE)). Project is [`osm-mapping-party-before-after` on GitHub](https://github.com/amandasaurus/osm-mapping-party-before-after)
+Copyright © 2021, Affero GPL v3+ (see [LICENCE](./LICENCE)). Project is [`osm-mapping-party-before-after` on GitHub](https://github.com/iandees/osm-mapping-party-before-after)
