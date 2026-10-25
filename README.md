@@ -36,7 +36,7 @@ There are three ways to use it:
 
 ## Running with Docker
 
-The pipeline and all of its dependencies are packaged in the `Dockerfile` in this repo. A prebuilt `amd64` image is available from the GitHub Container Registry as [`ghcr.io/iandees/osm-mapping-party-before-after:main`](https://github.com/iandees/osm-mapping-party-before-after/pkgs/container/osm-mapping-party-before-after), or you can build it yourself from this repo as described below. The base image is `amd64`-only, so on Apple Silicon add `--platform linux/amd64` to the `docker pull`/`docker build` commands.
+The pipeline and all of its dependencies are packaged in the `Dockerfile` in this repo. A prebuilt `amd64` image is available from the GitHub Container Registry as [`ghcr.io/iandees/osm-mapping-party-before-after:latest`](https://github.com/iandees/osm-mapping-party-before-after/pkgs/container/osm-mapping-party-before-after), or you can build it yourself from this repo as described below. The base image is `amd64`-only, so on Apple Silicon add `--platform linux/amd64` to the `docker pull`/`docker build` commands.
 
 ### Building the Docker container from scratch
 
