@@ -36,7 +36,7 @@ There are three ways to use it:
 
 ## Running with Docker
 
-The pipeline and all of its dependencies are packaged in the `Dockerfile` in this repo. There is no prebuilt public image, so build it locally (the base image is `amd64`-only; on Apple Silicon add `--platform linux/amd64` to the `docker build` command below).
+The pipeline and all of its dependencies are packaged in the `Dockerfile` in this repo. A prebuilt `amd64` image is available from the GitHub Container Registry as [`ghcr.io/iandees/osm-mapping-party-before-after:main`](https://github.com/iandees/osm-mapping-party-before-after/pkgs/container/osm-mapping-party-before-after), or you can build it yourself from this repo as described below. The base image is `amd64`-only, so on Apple Silicon add `--platform linux/amd64` to the `docker pull`/`docker build` commands.
 
 ### Building the Docker container from scratch
 
@@ -105,4 +105,4 @@ If you have tile-building setup on your computer, you can run `make.sh` without 
 
 ## Copyright & Licence
 
-Copyright © 2021, Affero GPL v3+ (see [LICENCE](./LICENCE)). Project is [`osm-mapping-party-before-after` on GitHub](https://github.com/iandees/osm-mapping-party-before-after)
+Copyright © 2021–2026, Affero GPL v3+ (see [LICENCE](./LICENCE)). Project is [`osm-mapping-party-before-after` on GitHub](https://github.com/iandees/osm-mapping-party-before-after)
