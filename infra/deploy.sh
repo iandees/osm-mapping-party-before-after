@@ -42,6 +42,7 @@ $AWS cloudformation deploy \
     "R2AccessKeyId=$R2_ACCESS_KEY_ID" \
     "R2SecretAccessKey=$R2_SECRET_ACCESS_KEY" \
     "CallbackSecret=$CALLBACK_SECRET" \
+    "AlertEmail=${ALERT_EMAIL:-}" \
     "GitHubOidcProviderArn=$GITHUB_OIDC_PROVIDER_ARN"
 
 echo "Stack deployed. Non-sensitive outputs:"

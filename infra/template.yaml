@@ -37,6 +37,18 @@ Parameters:
     MinValue: 21
     MaxValue: 200
     Description: Fargate ephemeral storage (region history extracts can be large; max 200).
+  ExternalDataSchedule:
+    Type: String
+    Default: "cron(0 6 1 * ? *)"
+    Description: When to rebuild and publish the osmdata water polygons (EventBridge expression; default 06:00 UTC on the 1st of each month).
+  ExternalDataImageTag:
+    Type: String
+    Default: latest
+    Description: Tag of the external-data build image in its ECR repository.
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: Email to notify when the scheduled external-data build fails (empty disables alerts; the subscription must be confirmed from the email).
   RegionCacheRetentionDays:
     Type: Number
     Default: 30
@@ -77,6 +89,7 @@ Parameters:
 
 Conditions:
   CreateOidcProvider: !Equals [!Ref GitHubOidcProviderArn, ""]
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
 
 Resources:
   # ---- Image registry -------------------------------------------------
@@ -84,6 +97,13 @@ Resources:
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: !Sub "${AWS::StackName}-render"
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  ExternalDataRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${AWS::StackName}-external-data"
       ImageScanningConfiguration:
         ScanOnPush: true
 
@@ -136,7 +156,9 @@ Resources:
                   - ecr:PutImage
                   - ecr:BatchGetImage
                   - ecr:GetDownloadUrlForLayer
-                Resource: !GetAtt RenderRepo.Arn
+                Resource:
+                  - !GetAtt RenderRepo.Arn
+                  - !GetAtt ExternalDataRepo.Arn
 
   # ---- Region history cache ------------------------------------------
   RegionCacheBucket:
@@ -321,6 +343,114 @@ Resources:
           - Name: CALLBACK_SECRET
             ValueFrom: !Sub "${RenderSecrets}:CALLBACK_SECRET::"
 
+  # ---- Scheduled osmdata water-polygon rebuild ------------------------
+  # Builds the coastline water polygons from the planet and publishes them to the
+  # public osm-data R2 bucket (infra/external-data). The planet is ~96GB, so this
+  # uses the maximum Fargate ephemeral storage; the build peaks around 10GB of RAM
+  # and is single-threaded, ~90 minutes.
+  ExternalDataJobDefinition:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      JobDefinitionName: !Sub "${AWS::StackName}-external-data"
+      Type: container
+      PlatformCapabilities: [FARGATE]
+      Timeout:
+        AttemptDurationSeconds: 14400
+      ContainerProperties:
+        Image: !Sub "${ExternalDataRepo.RepositoryUri}:${ExternalDataImageTag}"
+        ExecutionRoleArn: !GetAtt BatchExecutionRole.Arn
+        NetworkConfiguration:
+          AssignPublicIp: ENABLED
+        FargatePlatformConfiguration:
+          PlatformVersion: LATEST
+        EphemeralStorage:
+          SizeInGiB: 200
+        ResourceRequirements:
+          - Type: VCPU
+            Value: "4"
+          - Type: MEMORY
+            Value: "16384"
+        Environment:
+          - Name: R2_ENDPOINT
+            Value: !Ref R2Endpoint
+        Secrets:
+          - Name: R2_ACCESS_KEY_ID
+            ValueFrom: !Sub "${RenderSecrets}:R2_ACCESS_KEY_ID::"
+          - Name: R2_SECRET_ACCESS_KEY
+            ValueFrom: !Sub "${RenderSecrets}:R2_SECRET_ACCESS_KEY::"
+
+  ExternalDataScheduleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: submit-external-data-build
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: batch:SubmitJob
+                Resource:
+                  - !Ref RenderJobQueue
+                  - !Sub "arn:aws:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${AWS::StackName}-external-data:*"
+
+  ExternalDataScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Monthly rebuild of the osmdata water polygons.
+      ScheduleExpression: !Ref ExternalDataSchedule
+      State: ENABLED
+      Targets:
+        - Id: external-data-build
+          Arn: !Ref RenderJobQueue
+          RoleArn: !GetAtt ExternalDataScheduleRole.Arn
+          BatchParameters:
+            JobDefinition: !Ref ExternalDataJobDefinition
+            JobName: !Sub "${AWS::StackName}-external-data"
+
+  ExternalDataFailureTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlertEmail
+    Properties:
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  ExternalDataFailureTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Condition: HasAlertEmail
+    Properties:
+      Topics: [!Ref ExternalDataFailureTopic]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sns:Publish
+            Resource: !Ref ExternalDataFailureTopic
+
+  ExternalDataFailureRule:
+    Type: AWS::Events::Rule
+    Condition: HasAlertEmail
+    Properties:
+      Description: Notify when the scheduled external-data build fails.
+      State: ENABLED
+      EventPattern:
+        source: [aws.batch]
+        detail-type: [Batch Job State Change]
+        detail:
+          status: [FAILED]
+          jobDefinition:
+            - prefix: !Sub "arn:aws:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${AWS::StackName}-external-data:"
+      Targets:
+        - Id: email
+          Arn: !Ref ExternalDataFailureTopic
+
   # ---- SQS -> Batch pipe ---------------------------------------------
   RenderPipe:
     Type: AWS::Pipes::Pipe
@@ -364,6 +494,9 @@ Outputs:
   EcrRepositoryUri:
     Description: Push the render image here.
     Value: !GetAtt RenderRepo.RepositoryUri
+  ExternalDataRepositoryUri:
+    Description: The external-data build image is pushed here by CI.
+    Value: !GetAtt ExternalDataRepo.RepositoryUri
   GitHubDeployRoleArn:
     Description: Role ARN for the GitHub Actions AWS_DEPLOY_ROLE_ARN secret.
     Value: !GetAtt GitHubDeployRole.Arn
