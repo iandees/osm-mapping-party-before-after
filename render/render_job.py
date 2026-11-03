@@ -25,6 +25,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+import zipfile
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
@@ -229,6 +230,56 @@ def ensure_region_file(feature: dict, time_after: str, worker: "Worker") -> str:
     return local
 
 
+EXTERNAL_DATA_YML = os.path.join(ROOT, "openstreetmap-carto", "external-data.yml")
+EXTERNAL_DATA_DIR = os.path.join(ROOT, "openstreetmap-carto", "data")
+# Our public mirror of osmdata's shapefiles (infra/external-data). R2 egress is free,
+# so every render can fetch from here rather than from osmdata.openstreetmap.de.
+EXTERNAL_DATA_BASE_URL = "https://osmdata.mapki.com/download"
+
+
+def external_data_files() -> list[str]:
+    """Names of the shapefile zips openstreetmap-carto downloads, from its config."""
+    with open(EXTERNAL_DATA_YML) as f:
+        urls = re.findall(r"^\s+url:\s*(\S+)", f.read(), re.MULTILINE)
+    return [os.path.basename(urlparse(u).path) for u in urls]
+
+
+def restore_external_data() -> None:
+    """Seed openstreetmap-carto's data/ dir from our mirror of the osmdata files.
+
+    osmdata.openstreetmap.de has had outages that failed every render, and the water
+    shapefiles change rarely. make.sh imports what is here (get-external-data.py
+    --no-update) when every file is present, and otherwise downloads from osmdata as
+    before, so a mirror failure is never fatal. A zip is only kept, together with the
+    .lastmod file that script requires, if it downloaded completely.
+    """
+    base = env("EXTERNAL_DATA_BASE_URL", EXTERNAL_DATA_BASE_URL).rstrip("/")
+    os.makedirs(EXTERNAL_DATA_DIR, exist_ok=True)
+    for name in external_data_files():
+        local = os.path.join(EXTERNAL_DATA_DIR, name)
+        part = local + ".part"
+        try:
+            with requests.get(f"{base}/{name}", stream=True, timeout=(10, 60)) as r:
+                r.raise_for_status()
+                with open(part, "wb") as f:
+                    for chunk in r.iter_content(1 << 20):
+                        f.write(chunk)
+                expected = r.headers.get("Content-Length")
+                if expected is not None and os.path.getsize(part) != int(expected):
+                    raise RuntimeError("truncated download")
+                if not zipfile.is_zipfile(part):
+                    raise RuntimeError("not a valid zip")
+                lastmod = r.headers.get("Last-Modified", "mirror")
+            os.replace(part, local)
+            with open(local + ".lastmod", "w") as f:
+                f.write(lastmod)
+        except Exception as e:  # noqa: BLE001 — fall back to osmdata in make.sh
+            print(f"external data mirror miss for {name}: {e}")
+            for p in (part, local, local + ".lastmod"):
+                if os.path.exists(p):
+                    os.remove(p)
+
+
 # e.g. "  Processed 1234 nodes in 0s - 1234/s" in osm2pgsql's import summary.
 OSM2PGSQL_PROCESSED = re.compile(r"Processed (\d+) (?:nodes|ways|relations) in ")
 
@@ -369,6 +420,8 @@ def main() -> int:
             updates_url=region_updates_url(feature),
             progress=worker.progress,
         )
+        if (params.get("style") or "carto") == "carto":
+            restore_external_data()
         run_make(history_file, params, worker)
 
         worker.progress("Uploading your map…")
