@@ -104,6 +104,82 @@ class EnsureRegionFileTests(unittest.TestCase):
             client.return_value.upload_file.assert_called_once()
 
 
+class RestoreExternalDataTests(unittest.TestCase):
+    YML = (
+        "sources:\n"
+        "  a:\n    url: https://osmdata.example/download/a-3857.zip\n"
+        "  b:\n    url: https://osmdata.example/download/b-3857.zip\n"
+    )
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.data = os.path.join(self.tmp.name, "data")
+        yml = os.path.join(self.tmp.name, "external-data.yml")
+        with open(yml, "w") as f:
+            f.write(self.YML)
+        for p in (
+            mock.patch.object(render_job, "EXTERNAL_DATA_YML", yml),
+            mock.patch.object(render_job, "EXTERNAL_DATA_DIR", self.data),
+            mock.patch.dict(os.environ, {"EXTERNAL_DATA_BASE_URL": "https://mirror.example/download/"}),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+
+    @staticmethod
+    def _zip_bytes():
+        import io
+        import zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("x", "y")
+        return buf.getvalue()
+
+    def _response(self, body, headers=None):
+        r = mock.MagicMock()
+        r.__enter__.return_value = r
+        r.iter_content.return_value = [body]
+        r.headers = {"Content-Length": str(len(body)), "Last-Modified": "Mon, 02 Nov 2026 21:21:26 GMT"}
+        r.headers.update(headers or {})
+        return r
+
+    def test_file_names_come_from_the_config(self):
+        self.assertEqual(render_job.external_data_files(), ["a-3857.zip", "b-3857.zip"])
+
+    def test_downloads_each_zip_from_the_mirror_with_its_lastmod(self):
+        with mock.patch("requests.get", side_effect=lambda *a, **k: self._response(self._zip_bytes())) as get:
+            render_job.restore_external_data()
+        self.assertEqual([c.args[0] for c in get.call_args_list], [
+            "https://mirror.example/download/a-3857.zip", "https://mirror.example/download/b-3857.zip"])
+        self.assertEqual(sorted(os.listdir(self.data)),
+                         ["a-3857.zip", "a-3857.zip.lastmod", "b-3857.zip", "b-3857.zip.lastmod"])
+        with open(os.path.join(self.data, "a-3857.zip.lastmod")) as f:
+            self.assertEqual(f.read(), "Mon, 02 Nov 2026 21:21:26 GMT")
+
+    def test_http_error_leaves_no_files(self):
+        r = self._response(b"")
+        r.raise_for_status.side_effect = requests.HTTPError("404")
+        with mock.patch("requests.get", return_value=r):
+            render_job.restore_external_data()
+        self.assertEqual(os.listdir(self.data), [])
+
+    def test_truncated_download_is_discarded(self):
+        body = self._zip_bytes()
+        with mock.patch("requests.get", return_value=self._response(body, {"Content-Length": str(len(body) + 10)})):
+            render_job.restore_external_data()
+        self.assertEqual(os.listdir(self.data), [])
+
+    def test_non_zip_body_is_discarded(self):
+        with mock.patch("requests.get", return_value=self._response(b"<html>not a zip</html>")):
+            render_job.restore_external_data()
+        self.assertEqual(os.listdir(self.data), [])
+
+    def test_connection_failure_is_not_fatal(self):
+        with mock.patch("requests.get", side_effect=requests.ConnectionError("down")):
+            render_job.restore_external_data()
+        self.assertEqual(os.listdir(self.data), [])
+
+
 class RunMakeEmptyAreaTests(unittest.TestCase):
     PARAMS = {"zoom": 12, "num_frames": 2, "time_before": "a", "time_after": "b", "bbox": "0,0,1,1"}
 

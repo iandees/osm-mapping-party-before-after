@@ -165,8 +165,18 @@ fi
 
 if [ "$STYLE" = "carto" ] && [ ! -e "$ROOT/openstreetmap-carto/data/.external-data-done" ] ; then
   cd "$ROOT/openstreetmap-carto/"
-  echo "Downloading external datasets..."
-  ./scripts/get-external-data.py
+  # render_job.py downloads these zips (and writes their .lastmod files) from our
+  # mirror into data/ before we run. When they are all present, --no-update imports
+  # them without contacting osmdata.openstreetmap.de, so an outage there doesn't
+  # fail the render. Otherwise we download from osmdata, as carto normally does.
+  EXTERNAL_DATA_FLAGS="--cache"
+  EXTERNAL_DATA_CACHED=1
+  for url in $(grep -o 'url: .*' external-data.yml | cut -d' ' -f2) ; do
+    [ -e "data/$(basename "$url")" ] && [ -e "data/$(basename "$url").lastmod" ] || EXTERNAL_DATA_CACHED=0
+  done
+  [ "$EXTERNAL_DATA_CACHED" = 1 ] && EXTERNAL_DATA_FLAGS="--cache --no-update"
+  echo "Downloading external datasets ($EXTERNAL_DATA_FLAGS)..."
+  ./scripts/get-external-data.py $EXTERNAL_DATA_FLAGS
   touch data/.external-data-done
   cd "$ROOT"
 fi
