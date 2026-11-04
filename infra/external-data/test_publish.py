@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 import zipfile
+from unittest import mock
 
 import publish
 
@@ -109,6 +110,20 @@ class CollectTests(unittest.TestCase):
         page = publish.render_index(m)
         self.assertIn("icesheet_proc", page)
         self.assertNotIn("empty placeholders", page)
+
+
+class CheckAgainstTests(unittest.TestCase):
+    def test_sends_a_user_agent_cloudflare_accepts(self):
+        seen = {}
+
+        def fake_urlopen(req, timeout):
+            seen["ua"] = req.get_header("User-agent")
+            return io.StringIO('{"files": {}}')
+
+        with mock.patch("publish.urllib.request.urlopen", fake_urlopen):
+            publish.check_against("https://example.test/manifest.json", {})
+        self.assertEqual(seen["ua"], publish.USER_AGENT)
+        self.assertNotIn("urllib", seen["ua"])
 
 
 class HumanSizeTests(unittest.TestCase):
