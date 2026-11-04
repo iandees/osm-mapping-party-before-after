@@ -34,23 +34,25 @@ BUCKET = "osm-data"
 SITE = "https://osmdata.mapki.com"
 REPO = "https://github.com/iandees/osm-mapping-party-before-after"
 
-# name -> (what it is, "built" or "placeholder")
+# name -> (description, description if it is an empty placeholder or None if the file
+# must be in the build output). The icesheet files fall back to the placeholders when
+# build-icesheet.sh's output is absent.
 FILES = {
     "water-polygons-split-3857.zip": (
         "Coastline water polygons, split into a grid, full resolution (zoom 10 and up).",
-        "built",
+        None,
     ),
     "simplified-water-polygons-split-3857.zip": (
         "The same polygons simplified for low zooms (zoom 9 and below).",
-        "built",
+        None,
     ),
     "antarctica-icesheet-polygons-3857.zip": (
+        "Antarctic ice sheet polygons: ice-covered areas not mapped as glacier.",
         "Antarctic ice sheet polygons. Empty placeholder, see below.",
-        "placeholder",
     ),
     "antarctica-icesheet-outlines-3857.zip": (
+        "Antarctic ice sheet outlines, with an ice_edge attribute.",
         "Antarctic ice sheet outlines. Empty placeholder, see below.",
-        "placeholder",
     ),
 }
 
@@ -59,7 +61,7 @@ PAGE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OSM coastline water polygons</title>
+<title>OSM coastline and ice sheet shapefiles</title>
 <style>
   :root {{ --bg:#fff; --fg:#1c2530; --muted:#5b6673; --line:#d9dee4; --accent:#0b62c4; --code:#f2f4f7; }}
   @media (prefers-color-scheme: dark) {{
@@ -81,9 +83,9 @@ PAGE = """<!doctype html>
 </head>
 <body>
 <main>
-<h1>OSM coastline water polygons</h1>
-<p class="muted">Shapefiles for rendering the sea, built from OpenStreetMap
-<code>natural=coastline</code> data. Last updated <strong>{built_at}</strong>
+<h1>OSM coastline and ice sheet shapefiles</h1>
+<p class="muted">Shapefiles for rendering the sea and the Antarctic ice sheet, built from
+OpenStreetMap data. Last updated <strong>{built_at}</strong>
 from OpenStreetMap data as of <strong>{data_ts}</strong>.</p>
 
 <p class="note">This is an independent rebuild, not the official
@@ -116,7 +118,7 @@ the date above rather than the URL.</p>
 builds water polygons in EPSG:3857, splitting any with more than 1000 points.</li>
 <li><code>ogr2ogr</code> writes them as shapefiles. A second pass simplifies the polygons
 (Douglas&ndash;Peucker, {tolerance} m tolerance) for the low-zoom file.</li>
-<li>A build is only published if osmcoastline reports no unrepaired errors.</li>
+{icesheet_step}<li>A build is only published if osmcoastline reports no unrepaired errors.</li>
 </ol>
 <p>The scripts are in <a href="{repo}/tree/HEAD/infra/external-data">{repo_name}</a>.
 Rebuilt about once a month.</p>
@@ -124,8 +126,7 @@ Rebuilt about once a month.</p>
 <h2>Limitations</h2>
 <ul>
 <li>The simplified file is our own approximation of osmdata's low-zoom data and is not identical to it.</li>
-<li>The two Antarctic ice sheet files are <strong>empty placeholders</strong> (no features), published only
-so the set is complete. Maps of Antarctica will draw without ice.</li>
+{icesheet_limit}
 </ul>
 
 <h2>License</h2>
@@ -160,16 +161,23 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
-def collect(out_dir: str, placeholders: str | None) -> dict[str, str]:
-    """Map each published file name to its local path, failing if any is missing."""
-    paths = {}
-    for name, (_, kind) in FILES.items():
-        base = out_dir if kind == "built" else placeholders
-        path = os.path.join(base or "", name)
+def collect(out_dir: str, placeholders: str | None) -> tuple[dict[str, str], set[str]]:
+    """Map each published file name to its local path, failing if any is missing.
+
+    Returns the paths and the names that fell back to an empty placeholder.
+    """
+    paths, fallback = {}, set()
+    for name, (_, placeholder_desc) in FILES.items():
+        path = os.path.join(out_dir, name)
         if not os.path.isfile(path):
-            sys.exit(f"missing {path}" + ("" if base else " (pass --placeholders)"))
+            if placeholder_desc is None:
+                sys.exit(f"missing {path}")
+            path = os.path.join(placeholders or "", name)
+            if not os.path.isfile(path):
+                sys.exit(f"missing {name}" + ("" if placeholders else " (pass --placeholders)"))
+            fallback.add(name)
         paths[name] = path
-    return paths
+    return paths, fallback
 
 
 # A new build whose size differs from the published one by more than this is rejected.
@@ -212,23 +220,29 @@ def check_against(url: str, paths: dict[str, str]) -> None:
     check_sizes(previous, paths)
 
 
-def build_manifest(build: dict, paths: dict[str, str]) -> dict:
+def build_manifest(build: dict, paths: dict[str, str], placeholders: set[str], icesheet: dict | None) -> dict:
     files = {}
     for name, path in paths.items():
         files[name] = {
-            "description": FILES[name][0],
-            "placeholder": FILES[name][1] == "placeholder",
+            "description": FILES[name][1] if name in placeholders else FILES[name][0],
+            "placeholder": name in placeholders,
             "size": os.path.getsize(path),
             "sha256": sha256_file(path),
             "url": f"{SITE}/download/{name}",
         }
-    return {
+    manifest = {
         "built_at": build["built_at"],
         "planet_data_timestamp": build["planet_data_timestamp"],
         "osmcoastline_version": build["osmcoastline_version"],
         "simplify_tolerance_m": build["simplify_tolerance_m"],
         "files": files,
     }
+    if icesheet and not placeholders:
+        manifest["icesheet"] = {
+            "antarctica_data_timestamp": icesheet["antarctica_data_timestamp"],
+            "icesheet_proc_commit": icesheet["icesheet_proc_commit"],
+        }
+    return manifest
 
 
 def render_index(m: dict) -> str:
@@ -238,7 +252,27 @@ def render_index(m: dict) -> str:
         f'<td class="num">{human_size(f["size"])}</td></tr>'
         for name, f in m["files"].items()
     )
+    ice = m.get("icesheet")
+    if ice:
+        icesheet_step = (
+            "<li>The Antarctic ice sheet files come from "
+            '<a href="https://github.com/imagico/icesheet_proc">icesheet_proc</a> by Christoph Hormann, run on '
+            f"Geofabrik's Antarctica extract (data as of {fmt_ts(ice['antarctica_data_timestamp'])}): "
+            "the land polygons minus the mapped non-ice landcover, plus ice-edge outlines.</li>\n"
+        )
+        icesheet_limit = (
+            "<li>The Antarctic ice sheet files are built with icesheet_proc from OpenStreetMap data, "
+            "but we have not compared them with osmdata's, so they may differ.</li>"
+        )
+    else:
+        icesheet_step = ""
+        icesheet_limit = (
+            "<li>The two Antarctic ice sheet files are <strong>empty placeholders</strong> (no features), "
+            "published only so the set is complete. Maps of Antarctica will draw without ice.</li>"
+        )
     return PAGE.format(
+        icesheet_step=icesheet_step,
+        icesheet_limit=icesheet_limit,
         rows=rows,
         built_at=fmt_ts(m["built_at"]),
         data_ts=fmt_ts(m["planet_data_timestamp"]),
@@ -260,12 +294,17 @@ def main() -> int:
 
     with open(os.path.join(args.out_dir, "manifest.json")) as f:
         build = json.load(f)
-    paths = collect(args.out_dir, args.placeholders)
+    paths, placeholders = collect(args.out_dir, args.placeholders)
+    icesheet = None
+    info_path = os.path.join(args.out_dir, "icesheet-info.json")
+    if os.path.isfile(info_path):
+        with open(info_path) as f:
+            icesheet = json.load(f)
     for name, path in paths.items():
         verify_zip(name, path)
     if args.check_against:
         check_against(args.check_against, paths)
-    manifest = build_manifest(build, paths)
+    manifest = build_manifest(build, paths, placeholders, icesheet)
     page = render_index(manifest)
 
     if args.dry_run:
