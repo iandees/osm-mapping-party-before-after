@@ -63,6 +63,54 @@ class CheckSizesTests(unittest.TestCase):
         publish.check_sizes({"files": {"other.zip": {"size": 5}}}, self.paths)
 
 
+class CollectTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.out = os.path.join(self.tmp.name, "out")
+        self.ph = os.path.join(self.tmp.name, "placeholders")
+        os.makedirs(self.out)
+        os.makedirs(self.ph)
+        for name in ("water-polygons-split-3857.zip", "simplified-water-polygons-split-3857.zip"):
+            make_zip(os.path.join(self.out, name))
+        for name in ("antarctica-icesheet-polygons-3857.zip", "antarctica-icesheet-outlines-3857.zip"):
+            make_zip(os.path.join(self.ph, name))
+
+    def test_icesheet_falls_back_to_placeholders(self):
+        paths, fallback = publish.collect(self.out, self.ph)
+        self.assertEqual(fallback, {"antarctica-icesheet-polygons-3857.zip", "antarctica-icesheet-outlines-3857.zip"})
+        self.assertTrue(paths["antarctica-icesheet-polygons-3857.zip"].startswith(self.ph))
+
+    def test_built_icesheet_files_win_over_placeholders(self):
+        for name in ("antarctica-icesheet-polygons-3857.zip", "antarctica-icesheet-outlines-3857.zip"):
+            make_zip(os.path.join(self.out, name))
+        paths, fallback = publish.collect(self.out, self.ph)
+        self.assertEqual(fallback, set())
+        self.assertTrue(paths["antarctica-icesheet-outlines-3857.zip"].startswith(self.out))
+
+    def test_missing_water_zip_is_fatal(self):
+        os.remove(os.path.join(self.out, "water-polygons-split-3857.zip"))
+        with self.assertRaises(SystemExit):
+            publish.collect(self.out, self.ph)
+
+    def test_manifest_and_page_reflect_built_vs_placeholder(self):
+        build = {"built_at": "2026-11-03T20:54:17Z", "planet_data_timestamp": "2026-10-26T01:00:03Z",
+                 "osmcoastline_version": "osmcoastline version 2.4.1", "simplify_tolerance_m": 300}
+        info = {"antarctica_data_timestamp": "2026-11-02T21:21:26Z", "icesheet_proc_commit": "abc"}
+        paths, fallback = publish.collect(self.out, self.ph)
+        m = publish.build_manifest(build, paths, fallback, info)
+        self.assertNotIn("icesheet", m)
+        self.assertIn("empty placeholders", publish.render_index(m))
+        for name in ("antarctica-icesheet-polygons-3857.zip", "antarctica-icesheet-outlines-3857.zip"):
+            make_zip(os.path.join(self.out, name))
+        paths, fallback = publish.collect(self.out, self.ph)
+        m = publish.build_manifest(build, paths, fallback, info)
+        self.assertEqual(m["icesheet"]["icesheet_proc_commit"], "abc")
+        page = publish.render_index(m)
+        self.assertIn("icesheet_proc", page)
+        self.assertNotIn("empty placeholders", page)
+
+
 class HumanSizeTests(unittest.TestCase):
     def test_formats(self):
         self.assertEqual(publish.human_size(1537), "1.5 KB")

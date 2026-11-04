@@ -7,6 +7,10 @@ RUN apt-get update -qq \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY build.sh publish.py run.sh ./
+# Fetches the pinned icesheet_proc (GPL-3, not vendored) and compiles its osmium_noice.
+COPY setup-icesheet.sh ./
+RUN ./setup-icesheet.sh
+
+COPY build.sh build-icesheet.sh publish.py run.sh ./
 COPY placeholders ./placeholders
 ENTRYPOINT ["/app/run.sh"]

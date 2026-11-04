@@ -17,13 +17,14 @@ render, so we rebuild the files from OpenStreetMap ourselves and publish them at
 |---|---|
 | `water-polygons-split-3857.zip` | OSMCoastline on the planet's `natural=coastline` ways, EPSG:3857, `--max-points=1000` |
 | `simplified-water-polygons-split-3857.zip` | the same polygons run through `ogr2ogr -simplify 300` (≈1px at z9, the last zoom carto uses this layer). **An approximation** — we don't know how osmdata makes theirs |
-| `antarctica-icesheet-{polygons,outlines}-3857.zip` | **not rebuilt**: carto's empty placeholders (`placeholders/`). Antarctica renders without ice |
+| `antarctica-icesheet-{polygons,outlines}-3857.zip` | [icesheet_proc](https://github.com/imagico/icesheet_proc) (GPL-3) on Geofabrik's Antarctica extract: the land polygons minus the mapped non-ice landcover, plus `ice_edge` outlines. See below |
 
 ## Scheduled build (monthly)
 
 `infra/template.yaml` defines an EventBridge rule (`ExternalDataSchedule`, default 06:00 UTC on
 the 1st) that submits a Batch Fargate job (4 vCPU, 16 GB, 200 GiB ephemeral disk, ~90 minutes,
-well under a dollar) running the `Dockerfile` here: `run.sh` -> `build.sh` -> `publish.py`.
+well under a dollar, ~2 hours with the Antarctic step) running the `Dockerfile` here:
+`run.sh` -> `build-icesheet.sh` -> `build.sh` -> `publish.py`.
 The image is built and pushed to the `osm-before-after-external-data` ECR repo by
 `.github/workflows/external-data-image.yml` on pushes to `web-frontend`.
 
@@ -40,11 +41,34 @@ aws batch submit-job --job-name external-data-manual --job-queue <RenderJobQueue
 
 The sections below are the manual path, useful for the first build or debugging.
 
+## Antarctic icesheet
+
+`build-icesheet.sh` builds the two icesheet zips from Geofabrik's small Antarctica extract
+(`antarctica-latest.osm.pbf`, which has both the coastline and the landcover), so it takes
+about 40 minutes on a small instance, not the planet's hours. It runs OSMCoastline with
+`--output-polygons=both --output-lines` (the land/water polygons and coastline lines that
+icesheet_proc reads), then icesheet_proc itself.
+
+`setup-icesheet.sh` fetches the upstream script and `osmium_noice.cpp` at a pinned commit
+(`be4400f`, 2018 — upstream is unmaintained) and verifies their sha256s, so the GPL-3 code is
+never vendored here. It compiles `osmium_noice` with C++17 against current libosmium/GDAL and
+applies one patch: GDAL now rejects the `-gt` option upstream passes with `-skipfailures`.
+
+Known quirks: 64 `ice_ice` outline segments lie on the map's world edge (x = ±20037508) where
+the antimeridian cuts mapped glaciers; they are upstream behaviour and sit at the edge of the
+Mercator world. The ice stops at 85.05°S, the Web Mercator limit. We have not compared the
+output with osmdata's own files (their host was down when this was built).
+
+If `build-icesheet.sh`'s output is missing, `publish.py` falls back to the empty placeholders
+in `placeholders/` and says so on the page, but it rejects the build if that would replace
+real icesheet files that are already published (the size check).
+
 ## Build
 
 ```sh
-SMOKE=1 infra/external-data/launch.sh   # minutes, Monaco extract, t3.medium — checks the pipeline
-infra/external-data/launch.sh           # full planet, m6i.2xlarge, ~90 min, under a dollar
+SMOKE=1 infra/external-data/launch.sh        # minutes, Monaco extract, t3.medium — checks the pipeline
+MODE=icesheet infra/external-data/launch.sh  # just the Antarctic files, t3.large, ~40 min
+infra/external-data/launch.sh                # full planet, m6i.2xlarge, ~90 min, under a dollar
 ```
 
 `launch.sh` presigns S3 PUT URLs (no IAM role needed) and starts a Debian 13 instance in
@@ -53,7 +77,7 @@ us-east-1 that runs `build.sh` and **terminates itself**. Instance and volume ar
 open-data copy (`s3://osm-pds/planet-latest.osm.pbf`, same region, no transfer cost).
 
 Results land in `s3://<region-cache-bucket>/external-data-staging/` (`external-data-smoke/`
-for smoke runs) along with `build.log` and `manifest.json` (planet timestamp, tool
+for smoke runs, `external-data-icesheet/` for icesheet runs) along with `build.log` and `manifest.json` (planet timestamp, tool
 version, osmcoastline exit code, sha256s). osmcoastline exits 2 when it repaired a
 sub-metre gap in the coastline (normal; the planet has had one). The build accepts that
 only if nothing was left unconnected and warnings are within osmcoastline's limit;
