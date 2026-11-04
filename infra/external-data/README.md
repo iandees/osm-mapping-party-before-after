@@ -91,7 +91,7 @@ crossings, reversed rings) in the `error_points` and `error_lines` layers of `co
 (EPSG:4326; each feature has its type, the OSM node or way when there is one, a location
 and a bbox). `publish.py` uploads that file and a generated `coastline-problems.html`
 (summary, map and a list with OSM, iD and JOSM links) to the bucket root and links to it from
-the main page, so mappers can fix the data at the source. A failed export never fails the build.
+the main page, so mappers can fix the data at the source. A gap is reported once with its length, a place name (Nominatim), the ways touching each end and who last edited them, and the live OSM API is asked whether it has been edited since the planet snapshot (a coastline way now joining the ends is flagged *probably already fixed*). Those lookups are best effort and capped; a failed export or lookup never fails the build.
 
 ## Publish
 

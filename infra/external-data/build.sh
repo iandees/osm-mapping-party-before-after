@@ -63,7 +63,7 @@ rc=${PIPESTATUS[0]}
 set -o errexit
 echo "osmcoastline exit code: $rc"
 # Keep osmcoastline's list of problems for mappers; a failure here must not fail the build.
-python3 "$(dirname "$0")/problems.py" export coastline.db "$OUT/coastline-problems.geojson" \
+python3 "$(dirname "$0")/problems.py" export coastline.db "$OUT/coastline-problems.geojson" "$DATA_TS" \
   || echo "could not export coastline problems" >&2
 if [ "$rc" -ne 0 ] && [ "$ALLOW_ERRORS" != 1 ]; then
   fixed=$(sed -En 's/.*Closed ([0-9]+) rings\. This left ([0-9]+) nodes.*/\1/p' osmcoastline.log)
