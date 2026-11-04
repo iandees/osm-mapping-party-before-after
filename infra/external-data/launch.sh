@@ -54,7 +54,7 @@ else
   FILES=(
     water-polygons-split-3857.zip water-polygons-split-3857.zip.lastmod
     simplified-water-polygons-split-3857.zip simplified-water-polygons-split-3857.zip.lastmod
-    manifest.json build.log
+    manifest.json coastline-problems.geojson build.log
   )
   # Fail here, not an hour into an EC2 run, if the input can't be fetched.
   curl -fsSI -o /dev/null "$PLANET_URL" || { echo "cannot fetch $PLANET_URL" >&2; exit 1; }
@@ -62,7 +62,7 @@ fi
 
 # The instance fetches the scripts as a tarball (too big to embed in user-data).
 SRC=$(mktemp)
-tar czf "$SRC" -C "$HERE" build.sh build-icesheet.sh setup-icesheet.sh
+tar czf "$SRC" -C "$HERE" build.sh build-icesheet.sh setup-icesheet.sh problems.py
 $AWS s3 cp --only-show-errors "$SRC" "s3://$BUCKET/$PREFIX/src.tgz"
 rm -f "$SRC"
 

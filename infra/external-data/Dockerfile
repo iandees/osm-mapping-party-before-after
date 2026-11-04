@@ -11,6 +11,6 @@ WORKDIR /app
 COPY setup-icesheet.sh ./
 RUN ./setup-icesheet.sh
 
-COPY build.sh build-icesheet.sh publish.py run.sh ./
+COPY build.sh build-icesheet.sh publish.py problems.py run.sh ./
 COPY placeholders ./placeholders
 ENTRYPOINT ["/app/run.sh"]

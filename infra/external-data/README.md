@@ -83,6 +83,16 @@ sub-metre gap in the coastline (normal; the planet has had one). The build accep
 only if nothing was left unconnected and warnings are within osmcoastline's limit;
 otherwise it aborts, uploading only the log.
 
+## Coastline problems
+
+osmcoastline lists everything it had to work around (gaps it closed, ways that never join up,
+crossings, reversed rings) in the `error_points` and `error_lines` layers of `coastline.db`.
+`build.sh` runs `problems.py export` to turn them into `coastline-problems.geojson`
+(EPSG:4326; each feature has its type, the OSM node or way when there is one, a location
+and a bbox). `publish.py` uploads that file and a generated `coastline-problems.html`
+(summary, map and a list with OSM, iD and JOSM links) to the bucket root and links to it from
+the main page, so mappers can fix the data at the source. A failed export never fails the build.
+
 ## Publish
 
 Check `manifest.json` and the build log first, then upload to R2:
@@ -93,7 +103,7 @@ export R2_ENDPOINT=https://<account>.r2.cloudflarestorage.com R2_ACCESS_KEY_ID=.
 uv run --with boto3 infra/external-data/publish.py ./out --placeholders infra/external-data/placeholders
 ```
 
-`publish.py` uploads the zips, then `manifest.json`, then `index.html` last (generated from
+`publish.py` uploads the zips, then the coastline problem files, `manifest.json`, then `index.html` last (generated from
 the manifest: last-update time, sizes, links, how it's built, the ODbL licence), so the page
 never links to a missing file. `--dry-run` writes the page locally without uploading.
 The bucket is attached to `osmdata.mapki.com` as an R2 custom domain.

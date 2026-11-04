@@ -28,7 +28,7 @@ OUT="$WORK/out"
 if ! command -v osmcoastline >/dev/null; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
-  apt-get install -y -qq --no-install-recommends ca-certificates curl osmcoastline osmium-tool gdal-bin zip
+  apt-get install -y -qq --no-install-recommends ca-certificates curl osmcoastline osmium-tool gdal-bin python3 zip
 fi
 
 mkdir -p "$WORK" "$OUT"
@@ -62,6 +62,9 @@ osmcoastline -v -f -o coastline.db --srs=3857 --output-polygons=water --max-poin
 rc=${PIPESTATUS[0]}
 set -o errexit
 echo "osmcoastline exit code: $rc"
+# Keep osmcoastline's list of problems for mappers; a failure here must not fail the build.
+python3 "$(dirname "$0")/problems.py" export coastline.db "$OUT/coastline-problems.geojson" \
+  || echo "could not export coastline problems" >&2
 if [ "$rc" -ne 0 ] && [ "$ALLOW_ERRORS" != 1 ]; then
   fixed=$(sed -En 's/.*Closed ([0-9]+) rings\. This left ([0-9]+) nodes.*/\1/p' osmcoastline.log)
   unconnected=$(sed -En 's/.*Closed ([0-9]+) rings\. This left ([0-9]+) nodes.*/\2/p' osmcoastline.log)

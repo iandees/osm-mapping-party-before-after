@@ -30,8 +30,8 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Test publish.py
-        run: python3 -m unittest test_publish
+      - name: Test publish.py and problems.py
+        run: python3 -m unittest test_publish test_problems
         working-directory: infra/external-data
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3

@@ -9,6 +9,7 @@ served at https://osmdata.mapki.com/, laid out like osmdata.openstreetmap.de:
     download/<name>.zip   the shapefile zips (stable URLs, overwritten each build)
     manifest.json         machine-readable build info, sizes and checksums
     index.html            the human-readable page, generated here from the manifest
+    coastline-problems.*  osmcoastline's problem list for mappers (GeoJSON + page, see problems.py)
 
 Before uploading anything the zips are verified and, with --check-against, their sizes
 are compared with the manifest already published, so a bad build can't replace a good
@@ -29,6 +30,8 @@ import zipfile
 from datetime import datetime, timezone
 
 import boto3
+
+import problems
 
 BUCKET = "osm-data"
 SITE = "https://osmdata.mapki.com"
@@ -105,7 +108,7 @@ file names and layout, so it can stand in for those downloads when that site is 
 Files are in EPSG:3857 (Web Mercator) and are replaced in place on each update, so check
 the date above rather than the URL.</p>
 
-<h2>Using it with openstreetmap-carto</h2>
+{problems_section}<h2>Using it with openstreetmap-carto</h2>
 <p>The URLs match osmdata's <code>/download/</code> paths. Replace
 <code>https://osmdata.openstreetmap.de/download/</code> with
 <code>{site}/download/</code> in carto's <code>external-data.yml</code>.</p>
@@ -225,7 +228,8 @@ def check_against(url: str, paths: dict[str, str]) -> None:
     check_sizes(previous, paths)
 
 
-def build_manifest(build: dict, paths: dict[str, str], placeholders: set[str], icesheet: dict | None) -> dict:
+def build_manifest(build: dict, paths: dict[str, str], placeholders: set[str], icesheet: dict | None,
+                   problem_count: int | None = None) -> dict:
     files = {}
     for name, path in paths.items():
         files[name] = {
@@ -247,7 +251,18 @@ def build_manifest(build: dict, paths: dict[str, str], placeholders: set[str], i
             "antarctica_data_timestamp": icesheet["antarctica_data_timestamp"],
             "icesheet_proc_commit": icesheet["icesheet_proc_commit"],
         }
+    if problem_count is not None:
+        manifest["coastline_problems"] = problem_count
     return manifest
+
+
+def render_problems_section(count: int | None) -> str:
+    if count is None:
+        return ""
+    found = (f"osmcoastline found <strong>{count}</strong> place{'' if count == 1 else 's'} where the "
+             "coastline is broken or inconsistent" if count else "osmcoastline found no coastline problems in this build")
+    return (f"<h2>Coastline problems</h2>\n<p>{found}. "
+            '<a href="coastline-problems.html">See the list and map</a> if you want to help fix them in OpenStreetMap.</p>\n\n')
 
 
 def render_index(m: dict) -> str:
@@ -276,6 +291,7 @@ def render_index(m: dict) -> str:
             "published only so the set is complete. Maps of Antarctica will draw without ice.</li>"
         )
     return PAGE.format(
+        problems_section=render_problems_section(m.get("coastline_problems")),
         icesheet_step=icesheet_step,
         icesheet_limit=icesheet_limit,
         rows=rows,
@@ -309,12 +325,21 @@ def main() -> int:
         verify_zip(name, path)
     if args.check_against:
         check_against(args.check_against, paths)
-    manifest = build_manifest(build, paths, placeholders, icesheet)
+    problems_fc = None
+    problems_path = os.path.join(args.out_dir, "coastline-problems.geojson")
+    if os.path.isfile(problems_path):
+        with open(problems_path) as f:
+            problems_fc = json.load(f)
+    manifest = build_manifest(build, paths, placeholders, icesheet, problems.count(problems_fc) if problems_fc else None)
     page = render_index(manifest)
+    problems_page = problems.render_page(problems_fc, fmt_ts(build["planet_data_timestamp"])) if problems_fc else None
 
     if args.dry_run:
         with open(os.path.join(args.out_dir, "index.html"), "w") as f:
             f.write(page)
+        if problems_page:
+            with open(os.path.join(args.out_dir, "coastline-problems.html"), "w") as f:
+                f.write(problems_page)
         print(f"wrote {args.out_dir}/index.html")
         return 0
 
@@ -329,6 +354,12 @@ def main() -> int:
         print(f"uploading download/{name} ({human_size(os.path.getsize(path))})")
         s3.upload_file(path, BUCKET, f"download/{name}", ExtraArgs={
             "ContentType": "application/zip", "CacheControl": "public, max-age=3600"})
+    if problems_fc:
+        # The page fetches the GeoJSON by relative URL, so both go up before index.html links to them.
+        s3.upload_file(problems_path, BUCKET, "coastline-problems.geojson", ExtraArgs={
+            "ContentType": "application/geo+json", "CacheControl": "public, max-age=300"})
+        s3.put_object(Bucket=BUCKET, Key="coastline-problems.html", Body=problems_page.encode(),
+                      ContentType="text/html; charset=utf-8", CacheControl="public, max-age=300")
     s3.put_object(Bucket=BUCKET, Key="manifest.json", Body=json.dumps(manifest, indent=2).encode(),
                   ContentType="application/json", CacheControl="public, max-age=300")
     s3.put_object(Bucket=BUCKET, Key="index.html", Body=page.encode(),
