@@ -208,9 +208,14 @@ def check_sizes(previous: dict, paths: dict[str, str]) -> None:
             sys.exit(f"{name}: size is {ratio:.2f}x the published file (allowed {lo}-{hi}); not publishing")
 
 
+# Cloudflare answers 403 to urllib's default "Python-urllib" User-Agent.
+USER_AGENT = f"osm-before-after-external-data/1.0 (+{REPO})"
+
+
 def check_against(url: str, paths: dict[str, str]) -> None:
     try:
-        with urllib.request.urlopen(url, timeout=30) as r:
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=30) as r:
             previous = json.load(r)
     except urllib.error.HTTPError as e:
         if e.code != 404:
