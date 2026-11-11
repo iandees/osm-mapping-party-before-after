@@ -63,27 +63,6 @@ function jobMeta(job: Job): string {
   );
 }
 
-/**
- * Site-wide dismissable notice. Bump the id to show a new one to people who dismissed
- * the old one; the dismissal is remembered per browser in localStorage.
- */
-const NOTICE_ID = "osmdata-outage-2026-11";
-const NOTICE = `<div class="notice" id="notice" role="status" hidden>
-<p><strong>Heads up:</strong> osmdata.openstreetmap.de, which supplies the water and ice shapefiles used to draw maps, went down on 3 November 2026, so some maps failed to render. We built a replacement dataset (<a href="https://osmdata.mapki.com/" target="_blank" rel="noopener">osmdata.mapki.com</a>) and renders are being switched over to it. <strong>If a map recently failed, please submit it again.</strong></p>
-<button type="button" id="notice-close" aria-label="Dismiss this notice" title="Dismiss">×</button>
-</div>
-<script>
-(function () {
-  var el = document.getElementById("notice"), key = "notice-dismissed:${NOTICE_ID}";
-  try { if (localStorage.getItem(key)) return; } catch (e) {}
-  el.hidden = false;
-  document.getElementById("notice-close").onclick = function () {
-    el.hidden = true;
-    try { localStorage.setItem(key, "1"); } catch (e) {}
-  };
-})();
-</script>`;
-
 function layout(title: string, body: string, head = ""): string {
   return `<!doctype html>
 <html lang="en">
@@ -145,16 +124,10 @@ function layout(title: string, body: string, head = ""): string {
   ol.checklist li.active .mark .spinner { width: 1.1rem; height: 1.1rem; border: 3px solid rgba(127,127,127,0.4);
     border-top-color: #e6007e; border-radius: 50%; animation: spin 0.9s linear infinite; }
   ol.checklist li .detail { color: #666; font-weight: 400; font-size: 0.9rem; }
-  .notice { display: flex; align-items: flex-start; gap: 0.75rem; margin: 0 0 1rem; padding: 0.6rem 0.9rem;
-    border: 1px solid #e0a800; border-left-width: 4px; border-radius: 4px; background: rgba(255,193,7,0.15); font-size: 0.9rem; }
-  .notice[hidden] { display: none; }
-  .notice p { margin: 0; flex: 1 1 auto; }
-  .notice button { margin: 0; padding: 0 0.25rem; border: none; background: none; color: inherit; font-size: 1.3rem; line-height: 1; cursor: pointer; }
 </style>
 ${head}
 </head>
 <body>
-${NOTICE}
 ${body}
 <footer class="foot"><a href="/about">About</a> · <a href="https://github.com/iandees/osm-mapping-party-before-after" target="_blank" rel="noopener">Source on GitHub</a></footer>
 </body>
@@ -640,7 +613,7 @@ ${costLine(job)}
       "Job failed",
       `<h1>Something went wrong</h1>
 <p class="muted">${jobMeta(job)}</p>
-<p class="error">${esc(job.error ?? "The render failed.")}</p>
+<p class="error">Sorry, this map could not be made. Please try again; if it keeps failing, it has been reported.</p>
 ${costLine(job)}
 <p><a href="/">Try again</a></p>`,
     );

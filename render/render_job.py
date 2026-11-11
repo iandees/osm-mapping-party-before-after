@@ -88,18 +88,26 @@ def fetch_region_index() -> dict:
 
 def geofabrik_cookie(dest: str) -> None:
     """Obtain a Geofabrik OAuth cookie via the bundled sendfile_osm_oauth_protector."""
-    subprocess.run(
-        [
-            "python3",
-            os.path.join(ROOT, "sendfile_osm_oauth_protector", "oauth_cookie_client.py"),
-            "--user", env("GEOFABRIK_USER"),
-            "--password", env("GEOFABRIK_PASSWORD"),
-            "--consumer-url", env("GEOFABRIK_COOKIE_URL", "https://osm-internal.download.geofabrik.de/get_cookie"),
-            "-f", "http",
-            "-o", dest,
-        ],
-        check=True,
-    )
+    try:
+        subprocess.run(
+            [
+                "python3",
+                os.path.join(ROOT, "sendfile_osm_oauth_protector", "oauth_cookie_client.py"),
+                "--user", env("GEOFABRIK_USER"),
+                "--password", env("GEOFABRIK_PASSWORD"),
+                "--consumer-url", env("GEOFABRIK_COOKIE_URL", "https://osm-internal.download.geofabrik.de/get_cookie"),
+                "-f", "http",
+                "-o", dest,
+            ],
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        # CalledProcessError's message embeds the whole command line, password
+        # included, and it is shown to the requester. Raise a RuntimeError without
+        # it (also lets download_valid_region_file retry transient network errors).
+        raise RuntimeError(
+            f"could not get a Geofabrik login cookie (exit status {e.returncode})"
+        ) from None
 
 
 def download_from_geofabrik(url: str, dest: str) -> None:
@@ -384,6 +392,15 @@ def upload_results(job_id: str) -> dict[str, str]:
     return keys
 
 
+def redact_secrets(text: str) -> str:
+    """Remove configured credentials from text that will be shown to users."""
+    for name in ("GEOFABRIK_PASSWORD", "CALLBACK_SECRET"):
+        secret = os.environ.get(name)
+        if secret:
+            text = text.replace(secret, "[REDACTED]")
+    return re.sub(r"(--password'?,?\s*)'[^']*'", r"\1'[REDACTED]'", text)
+
+
 def main() -> int:
     job_id = env("JOB_ID")
     worker = Worker(env("WORKER_BASE_URL"), env("CALLBACK_SECRET"), job_id)
@@ -433,9 +450,10 @@ def main() -> int:
         worker.post_status(status="done", **done_kwargs)
         return 0
     except Exception as e:  # noqa: BLE001 — report any failure back to the Worker
-        print(f"render failed: {e}", file=sys.stderr)
+        message = redact_secrets(str(e))
+        print(f"render failed: {message}", file=sys.stderr)
         try:
-            worker.post_status(status="failed", error=str(e)[:500])
+            worker.post_status(status="failed", error=message[:500])
         except Exception as e2:  # noqa: BLE001
             print(f"failed to report failure: {e2}", file=sys.stderr)
         return 1

@@ -249,6 +249,9 @@ describe("home", () => {
 
     const html = await (await app.request(`/jobs/${job.id}`, {}, e)).text();
     expect(html).toContain("Something went wrong");
+    expect(html).not.toContain("the render blew up"); // internal error text is never shown to users
+    const status = await (await app.request(`/jobs/${job.id}/status`, {}, e)).json();
+    expect(status).not.toHaveProperty("error");
     expect(html).toContain("-0.2,51.4,0,51.6"); // bbox now shown on the failed page too
     expect(html).toContain("· Americana");
   });
