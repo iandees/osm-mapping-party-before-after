@@ -613,7 +613,7 @@ ${costLine(job)}
       "Job failed",
       `<h1>Something went wrong</h1>
 <p class="muted">${jobMeta(job)}</p>
-<p class="error">${esc(job.error ?? "The render failed.")}</p>
+<p class="error">Sorry, this map could not be made. Please try again; if it keeps failing, it has been reported.</p>
 ${costLine(job)}
 <p><a href="/">Try again</a></p>`,
     );

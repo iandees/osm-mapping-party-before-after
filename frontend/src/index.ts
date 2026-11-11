@@ -168,7 +168,6 @@ app.get("/jobs/:id/status", async (c) => {
   if (!job) return c.json({ error: "not found" }, 404);
   return c.json({
     status: job.status,
-    error: job.error,
     progress: job.progress,
     result_key: job.result_key,
   });
@@ -219,6 +218,8 @@ app.post("/internal/jobs/:id", async (c) => {
     return c.json({ ok: true });
   }
   if (body.status === "failed") {
+    // The full error stays server-side (Worker log + D1 + Slack); users only see a generic message.
+    console.error(`render failed for job ${id}: ${body.error ?? "render failed"}`);
     const applied = await markJobFailed(c.env.DB, id, body.error ?? "render failed");
     if (applied) {
       const job = await getJob(c.env.DB, id);
