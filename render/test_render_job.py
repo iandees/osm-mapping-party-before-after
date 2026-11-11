@@ -292,3 +292,19 @@ class UploadResultsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SecretRedactionTests(unittest.TestCase):
+    def test_cookie_failure_does_not_leak_the_password(self):
+        err = subprocess.CalledProcessError(1, ["python3", "x.py", "--password", "hunter2"])
+        with mock.patch.dict(os.environ, {"GEOFABRIK_USER": "u", "GEOFABRIK_PASSWORD": "hunter2"}), \
+                mock.patch.object(subprocess, "run", side_effect=err):
+            with self.assertRaises(RuntimeError) as cm:
+                render_job.geofabrik_cookie("/tmp/x")
+        self.assertNotIn("hunter2", str(cm.exception))
+
+    def test_redact_secrets_scrubs_env_value_and_password_argument(self):
+        with mock.patch.dict(os.environ, {"GEOFABRIK_PASSWORD": "hunter2"}):
+            self.assertNotIn("hunter2", render_job.redact_secrets("bad hunter2 here"))
+        out = render_job.redact_secrets("['x', '--password', 'other', '-o']")
+        self.assertNotIn("other", out)
