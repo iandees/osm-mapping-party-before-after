@@ -290,8 +290,6 @@ class UploadResultsTests(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class SecretRedactionTests(unittest.TestCase):
@@ -308,3 +306,32 @@ class SecretRedactionTests(unittest.TestCase):
             self.assertNotIn("hunter2", render_job.redact_secrets("bad hunter2 here"))
         out = render_job.redact_secrets("['x', '--password', 'other', '-o']")
         self.assertNotIn("other", out)
+
+
+class GeofabrikRedirectTests(unittest.TestCase):
+    def _resp(self, status, location=None):
+        r = mock.Mock()
+        r.is_redirect = location is not None
+        r.headers = {"Location": location} if location else {}
+        r.status_code = status
+        return r
+
+    def test_cookie_is_resent_on_redirect_to_geofabrik(self):
+        hops = [self._resp(307, "/north-america/old.osh.pbf"), self._resp(200)]
+        with mock.patch.object(requests, "get", side_effect=hops) as g:
+            render_job._get_following_redirects(
+                "https://osm-internal.download.geofabrik.de/new/x-internal.osh.pbf", "gf=1")
+        self.assertEqual(g.call_args_list[1].args[0],
+                         "https://osm-internal.download.geofabrik.de/north-america/old.osh.pbf")
+        for call in g.call_args_list:
+            self.assertEqual(call.kwargs["headers"], {"Cookie": "gf=1"})
+
+    def test_cookie_not_sent_to_other_hosts(self):
+        hops = [self._resp(302, "https://evil.example.com/x"), self._resp(200)]
+        with mock.patch.object(requests, "get", side_effect=hops) as g:
+            render_job._get_following_redirects("https://osm-internal.download.geofabrik.de/a", "gf=1")
+        self.assertEqual(g.call_args_list[1].kwargs["headers"], {})
+
+
+if __name__ == "__main__":
+    unittest.main()
