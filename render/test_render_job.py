@@ -290,8 +290,6 @@ class UploadResultsTests(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class SecretRedactionTests(unittest.TestCase):
@@ -308,3 +306,37 @@ class SecretRedactionTests(unittest.TestCase):
             self.assertNotIn("hunter2", render_job.redact_secrets("bad hunter2 here"))
         out = render_job.redact_secrets("['x', '--password', 'other', '-o']")
         self.assertNotIn("other", out)
+
+
+class GeofabrikCookieJarTests(unittest.TestCase):
+    # expiry 0, as a session cookie may be written; it must still be sent.
+    NETSCAPE = (
+        "# Netscape HTTP Cookie File\n"
+        ".geofabrik.de\tTRUE\t/\tTRUE\t0\tgf_download_oauth\tabc123\n"
+    )
+
+    def test_download_sends_the_login_cookie_from_a_session_jar(self):
+        def fake_cookie(dest):
+            with open(dest, "w") as f:
+                f.write(self.NETSCAPE)
+
+        sent = []
+
+        def fake_get(session, url, **kw):
+            # what the session would put on the wire; redirect hops reuse this jar
+            sent.append(session.prepare_request(requests.Request("GET", url)).headers.get("Cookie"))
+            resp = mock.MagicMock()
+            resp.__enter__.return_value = resp
+            resp.iter_content.return_value = [b"data"]
+            return resp
+
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(render_job, "geofabrik_cookie", side_effect=fake_cookie), \
+                mock.patch.object(requests.Session, "get", autospec=True, side_effect=fake_get):
+            render_job.download_from_geofabrik(
+                "https://osm-internal.download.geofabrik.de/x-internal.osh.pbf", os.path.join(d, "out"))
+        self.assertEqual(sent, ["gf_download_oauth=abc123"])
+
+
+if __name__ == "__main__":
+    unittest.main()
