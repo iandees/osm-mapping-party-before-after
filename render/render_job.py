@@ -26,8 +26,9 @@ import tempfile
 import time
 import urllib.request
 import zipfile
+from http.cookiejar import MozillaCookieJar
 from datetime import datetime, timedelta
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 
 import boto3
 import requests
@@ -87,7 +88,7 @@ def fetch_region_index() -> dict:
 
 
 def geofabrik_cookie(dest: str) -> None:
-    """Obtain a Geofabrik OAuth cookie via the bundled sendfile_osm_oauth_protector."""
+    """Write a Geofabrik OAuth cookie jar (Netscape format) via the bundled sendfile_osm_oauth_protector."""
     try:
         subprocess.run(
             [
@@ -96,7 +97,7 @@ def geofabrik_cookie(dest: str) -> None:
                 "--user", env("GEOFABRIK_USER"),
                 "--password", env("GEOFABRIK_PASSWORD"),
                 "--consumer-url", env("GEOFABRIK_COOKIE_URL", "https://osm-internal.download.geofabrik.de/get_cookie"),
-                "-f", "http",
+                "-f", "netscape",
                 "-o", dest,
             ],
             check=True,
@@ -110,40 +111,22 @@ def geofabrik_cookie(dest: str) -> None:
         ) from None
 
 
-def _get_following_redirects(url: str, cookie_value: str, max_redirects: int = 5) -> requests.Response:
-    """GET ``url`` (streamed), re-sending the login cookie on every redirect hop.
-
-    ``requests`` drops a hand-set ``Cookie`` header when it follows a redirect (it
-    rebuilds it from the cookie jar), and Geofabrik now redirects between old- and
-    new-style paths on the internal server, so the redirected request would arrive
-    unauthenticated and get a 403. Follow redirects ourselves, sending the cookie
-    only to https Geofabrik hosts.
-    """
-    for _ in range(max_redirects + 1):
-        parts = urlparse(url)
-        trusted = parts.scheme == "https" and (parts.hostname or "").endswith("geofabrik.de")
-        r = requests.get(
-            url,
-            headers={"Cookie": cookie_value} if trusted else {},
-            stream=True, timeout=3600, allow_redirects=False,
-        )
-        if r.is_redirect and r.headers.get("Location"):
-            url = urljoin(url, r.headers["Location"])
-            r.close()
-            continue
-        return r
-    raise RuntimeError("too many redirects downloading the region file")
-
-
 def download_from_geofabrik(url: str, dest: str) -> None:
+    # A cookie jar (rather than a hand-set Cookie header) lets requests keep sending
+    # the login cookie across redirects, which Geofabrik now uses between URL styles.
     with tempfile.NamedTemporaryFile(prefix="cookie", suffix=".txt") as cookie:
         geofabrik_cookie(cookie.name)
-        cookie_value = open(cookie.name).read().strip()
-    with _get_following_redirects(url, cookie_value) as r:
-        r.raise_for_status()
-        with open(dest, "wb") as f:
-            for chunk in r.iter_content(chunk_size=1 << 20):
-                f.write(chunk)
+        jar = MozillaCookieJar(cookie.name)
+        jar.load(ignore_discard=True, ignore_expires=True)
+    for c in jar:
+        c.expires = None  # a "0" expiry in the file would otherwise make requests drop it
+    with requests.Session() as session:
+        session.cookies = jar
+        with session.get(url, stream=True, timeout=3600) as r:
+            r.raise_for_status()
+            with open(dest, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1 << 20):
+                    f.write(chunk)
 
 
 def _parse_iso(s: str) -> datetime:

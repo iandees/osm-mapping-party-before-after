@@ -308,29 +308,34 @@ class SecretRedactionTests(unittest.TestCase):
         self.assertNotIn("other", out)
 
 
-class GeofabrikRedirectTests(unittest.TestCase):
-    def _resp(self, status, location=None):
-        r = mock.Mock()
-        r.is_redirect = location is not None
-        r.headers = {"Location": location} if location else {}
-        r.status_code = status
-        return r
+class GeofabrikCookieJarTests(unittest.TestCase):
+    # expiry 0, as a session cookie may be written; it must still be sent.
+    NETSCAPE = (
+        "# Netscape HTTP Cookie File\n"
+        ".geofabrik.de\tTRUE\t/\tTRUE\t0\tgf_download_oauth\tabc123\n"
+    )
 
-    def test_cookie_is_resent_on_redirect_to_geofabrik(self):
-        hops = [self._resp(307, "/north-america/old.osh.pbf"), self._resp(200)]
-        with mock.patch.object(requests, "get", side_effect=hops) as g:
-            render_job._get_following_redirects(
-                "https://osm-internal.download.geofabrik.de/new/x-internal.osh.pbf", "gf=1")
-        self.assertEqual(g.call_args_list[1].args[0],
-                         "https://osm-internal.download.geofabrik.de/north-america/old.osh.pbf")
-        for call in g.call_args_list:
-            self.assertEqual(call.kwargs["headers"], {"Cookie": "gf=1"})
+    def test_download_sends_the_login_cookie_from_a_session_jar(self):
+        def fake_cookie(dest):
+            with open(dest, "w") as f:
+                f.write(self.NETSCAPE)
 
-    def test_cookie_not_sent_to_other_hosts(self):
-        hops = [self._resp(302, "https://evil.example.com/x"), self._resp(200)]
-        with mock.patch.object(requests, "get", side_effect=hops) as g:
-            render_job._get_following_redirects("https://osm-internal.download.geofabrik.de/a", "gf=1")
-        self.assertEqual(g.call_args_list[1].kwargs["headers"], {})
+        sent = []
+
+        def fake_get(session, url, **kw):
+            # what the session would put on the wire; redirect hops reuse this jar
+            sent.append(session.prepare_request(requests.Request("GET", url)).headers.get("Cookie"))
+            resp = mock.MagicMock()
+            resp.__enter__.return_value = resp
+            resp.iter_content.return_value = [b"data"]
+            return resp
+
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(render_job, "geofabrik_cookie", side_effect=fake_cookie), \
+                mock.patch.object(requests.Session, "get", autospec=True, side_effect=fake_get):
+            render_job.download_from_geofabrik(
+                "https://osm-internal.download.geofabrik.de/x-internal.osh.pbf", os.path.join(d, "out"))
+        self.assertEqual(sent, ["gf_download_oauth=abc123"])
 
 
 if __name__ == "__main__":
